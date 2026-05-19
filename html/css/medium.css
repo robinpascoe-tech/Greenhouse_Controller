@@ -1,0 +1,66 @@
+/* unused tags
+body { background: #666; }
+#page-wrap { width: 700px; }
+#page-wrap:after { content: "Medium Layout"; }
+#main-content { float: right; width: 440px; height: 300px; }
+#secondary-one { float: left; width: 170px; height: 300px; }
+#secondary-two { display: none; }
+*/
+
+#pagewrap {
+	width: 700px;
+}
+
+#pagewrap > div {  margin-bottom: 20px; }
+
+#floatcontainer {
+    display:flex;
+    width:700px;
+	margin-left: auto ;
+	margin-right: auto ;
+}
+
+#chartavgtempdiv {
+	float: left;
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	margin: 0 auto; 
+	/* margin-left: auto ;
+	margin-right: auto ; */
+}
+#chartoutsidetempdiv {
+	float: right;
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	margin: 0 auto; 
+	/* margin-left: auto ;
+	margin-right: auto ; */
+}
+#chartfronttempdiv {
+	float: left;
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	margin: 0 auto; 
+	/* margin-left: auto ;
+	margin-right: auto ; */
+}
+#chartbacktempdiv {
+	float: right;
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	margin: 0 auto; 
+	/* margin-left: auto ;
+	margin-right: auto ; */
+}

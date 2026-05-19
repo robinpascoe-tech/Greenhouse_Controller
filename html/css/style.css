@@ -1,0 +1,128 @@
+/*
+	 CSS-Tricks Example
+	 by Chris Coyier
+	 http://css-tricks.com
+*/
+
+/* not currently used
+* { margin: 0; padding: 0; }
+body { font: 14px Georgia, serif; }
+#page-wrap { margin: 40px auto; color: white; }
+#page-wrap > div { border: 1px solid #999; padding: 20px; margin-bottom: 5px; color: black; }
+#header { background: #eee; }
+#main-content { background: #eee; }
+#secondary-one { background: #eee;  }
+#secondary-two { background: #eee;  }
+*/
+
+#pagewrap { margin: 40px auto; position:relative }
+
+.auto-style4 {
+	text-align: center;
+	font-family: Arial, Helvetica, sans-serif;
+	color: black;
+	font-size: large;
+	text-shadow:
+	/*	-1px -1px 0 #0000FF,
+		1px -1px 0 #0000FF,
+		-1px 1px 0 #0000FF,
+		1px 1px 0 #0000FF; */
+}
+.largeheader {
+	text-align: center;
+	font-family: Arial, Helvetica, sans-serif;
+	color: black;
+	font-size: x-large;
+	font-weight: bold;
+}
+.auto-style5 {
+	font-family: "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+	font-size: large;
+}
+.auto-style6 {
+	text-align: right;
+	font-size: large;
+	font-family: "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+}
+.auto-style7 {
+	font-family: "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+	font-size: large;
+	color: #FA0000;
+	text-align: center;
+}
+.auto-style8 {
+	font-family: "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+	font-size: large;
+	color: #00FA12;
+	text-align: center;
+}
+.auto-style9 {
+	font-family: "Franklin Gothic Medium", "Arial Narrow", Arial, sans-serif;
+	font-size: large;
+	text-align: center;
+	color: black;
+	text-shadow:
+	/*	-1px -1px 0 #0000FF,
+		1px -1px 0 #0000FF,
+		-1px 1px 0 #0000FF,
+		1px 1px 0 #0000FF; */
+}
+a {
+	color: black;
+	text-shadow:
+	/*	-1px -1px 0 #0000FF,
+		1px -1px 0 #0000FF,
+		-1px 1px 0 #0000FF,
+		1px 1px 0 #0000FF; */
+}
+.centre-style {
+	text-align: center;
+	color: black;
+	text-shadow:
+	/*	-1px -1px 0 #0000FF,
+		1px -1px 0 #0000FF,
+		-1px 1px 0 #0000FF,
+		1px 1px 0 #0000FF; */
+}
+body {
+/*      background-image: url("/images/greenhousebg5.jpg"); */
+     background-repeat: no-repeat;
+     background-position: center top;
+	 background-attachment: fixed;
+	 background-size: cover;
+ } 
+.wrapchart {
+	width:950px;
+	background-color: #ffffff;
+	opacity: 1;
+	border-radius: 25px;
+	margin-left: auto ;
+	margin-right: auto ;
+}
+.wrapwebcam {
+	width:700px;
+	background-color: #ffffff;
+	opacity: 1;
+	border-radius: 25px;
+	margin-left: auto ;
+	margin-right: auto ;
+	text-align: center;
+}
+.wrap {
+	width:300px;
+	margin:0 auto;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+}
+
+.gauges {
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	
+	margin-left: auto ;
+	margin-right: auto ;
+}

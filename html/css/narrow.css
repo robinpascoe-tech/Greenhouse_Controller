@@ -1,0 +1,19 @@
+/*  Unused
+body { background: #333; }
+#page-wrap { width: 548px; }
+#page-wrap:after { content: "Narrow Layout"; }
+#secondary-two { display: none; }
+*/
+
+#floatcontainer > div { margin-bottom: 20px; }
+
+.gauges {
+	width:300px;
+	height:300px;
+	background-color: #ffffff;
+	opacity: 0.9;
+	border-radius: 25px;
+	
+	margin-left: auto ;
+	margin-right: auto ;
+}
