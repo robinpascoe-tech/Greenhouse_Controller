@@ -1,28 +1,69 @@
-#!/usr/bin/python
-
+#!/usr/bin/env python3
 
 ############################################################################
-# Check Sensors
-# Script run by CRON to check sensors and input information into database.
-# Author: Robin Pascoe
-# Version 1.3
-# Last Modified April 29 2016
+# Check Sensors (Modernized Python 3 Version)
+#
+# Original Author: Robin Pascoe
+# Modernized:
+#   - Python 3 compatible
+#   - PyMySQL instead of MySQLdb
+#   - Rotating log files for cron-safe operation
+#   - Timezone-aware UTC timestamps
+#   - Improved DS18B20 filtering and retry logic
+#   - 6 reads, discard high/low outliers, average remaining 4
+#
+# Functional behavior preserved from original script except:
+#   1. Fixed FrontTemp/BackTemp SQL swap bug
+#   2. Improved sensor validation/filtering
+#   3. Logging replaces print statements
 ############################################################################
 
-
-import MySQLdb as mdb
 import sys
-from decimal import Decimal
 import time
-from datetime import datetime
+import subprocess
+import logging
+from logging.handlers import RotatingFileHandler
+from decimal import Decimal
+from datetime import datetime, timezone
 
-import os
-import glob
+import pymysql
 
-os.system('modprobe w1-gpio')
-os.system('modprobe w1-therm')
 
-# Temp Sensor ID's
+# ============================================================================
+# LOGGING SETUP
+# ============================================================================
+
+LOG_FILE = "/var/log/greenhouse_sensors.log"
+
+logger = logging.getLogger("greenhouse_sensors")
+logger.setLevel(logging.INFO)
+
+handler = RotatingFileHandler(
+    LOG_FILE,
+    maxBytes=500000,      # 500 KB
+    backupCount=5
+)
+
+formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(message)s"
+)
+
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+
+# ============================================================================
+# LOAD KERNEL MODULES
+# ============================================================================
+
+subprocess.run(["modprobe", "w1-gpio"], check=False)
+subprocess.run(["modprobe", "w1-therm"], check=False)
+
+
+# ============================================================================
+# SENSOR IDS
+# ============================================================================
+
 FrontTempSensor = '28-0315018710ff'
 BackTempSensor = '28-04150123f0ff'
 PiTempSensor = '28-031515b5faff'
@@ -30,163 +71,417 @@ OutsideTempSensor = '28-0215036e59ff'
 WoodStoveTempSensor = '28-031504bcbfff'
 
 
-def getavgtemp( tempsensorid ):
-    """Read Temperature from Sensor 6 times drop 2 and average the output"""
-    avgtemperatures = []
-    temperatures = []
-    BadFileReadLoop = 0
-    # For Loop - Read Temperature 3 Times.
-    for polltime in range(0,3):
-        text = ''
-        # Check that the CRC check is successful - if not re-read until it is.
-        while text.split("\n")[0].find("YES") == -1:
-            # Try to open the File, if not found or other error return that sensor is BAD.
-            try:
-                tfile = open("/sys/bus/w1/devices/"+ tempsensorid +"/w1_slave")
-                # Read all of the text in the file.
-                text = tfile.read()
-                # Close the file now that the text has been read.
-                tfile.close()
-                BadFileReadLoop += 1
-                # If we fail to read the sensor 5 times indicate sensor is bad and exit.
-                if BadFileReadLoop > 4:
-                    avgtemperatures.insert(0, 85)
-                    avgtemperatures.insert(1, 0)
-                    return avgtemperatures
-                time.sleep(0)
-            except IOError as e:
-                print "I/O error({0}): {1}".format(e.errno, e.strerror)
-                avgtemperatures.insert(0, 85)
-                avgtemperatures.insert(1, 0)
-                return avgtemperatures
-            except:
-                print "Unexpected error:", sys.exc_info()[0]
-                avgtemperatures.insert(0, 85)
-                avgtemperatures.insert(1, 0)
-                return avgtemperatures
-        # Split the text with new lines (\n) and select the second line.
-        secondline = text.split("\n")[1]
-        # Split the line into words, referring to the spaces, and select the 10th word (counting from 0).
-        temperaturedata = secondline.split(" ")[9]
-        # The first two characters are "t=", so get rid of those and convert the temperature from a string to a number.
-        temperature = float(temperaturedata[2:])
-        # Put the decimal point in the right place and display it.
-        temperatures.append(temperature / 1000)
-        # Wait before reading sensor again.
-        time.sleep(0)
-    temperatures = sorted(temperatures)
-    # Use below to drop the 1st and 2nd temp readings.
-    # del temperatures[6]
-    # del temperatures[0]
-    # ### Average out the temperature, then return them.
-    avgtemperatures.append(sum(temperatures) / float(len(temperatures)))
-    # insert 1 into second item in array to indicate that sensor reading is good.
-    avgtemperatures.insert(1, 1)
-    return avgtemperatures
+# ============================================================================
+# DECIMAL HELPERS
+# ============================================================================
 
-# Grab each of the temperature readings
+TWOPLACES = Decimal("0.01")
+
+
+def d(val):
+    """Round Decimal to 2 places."""
+    return Decimal(val).quantize(TWOPLACES)
+
+
+def to_f(celsius):
+    """Convert Celsius to Fahrenheit."""
+    return d((celsius * 9 / 5) + 32)
+
+
+# ============================================================================
+# SENSOR READ FUNCTION
+# ============================================================================
+
+def getavgtemp(sensor_id):
+    """
+    Read DS18B20 temperature sensor 6 times.
+    Discard:
+        - highest value
+        - lowest value
+    Average remaining 4 readings.
+
+    Additional protections:
+        - discard 85.0C glitch readings
+        - discard impossible temperatures
+        - retry CRC failures properly
+
+    Returns:
+        [temperature, status]
+
+        status:
+            1 = success
+            0 = failure
+    """
+
+    temperatures = []
+
+    max_crc_failures = 5
+    crc_failures = 0
+
+    max_total_attempts = 20
+    total_attempts = 0
+
+    while len(temperatures) < 6:
+
+        total_attempts += 1
+
+        if total_attempts > max_total_attempts:
+            logger.warning(
+                f"Sensor {sensor_id} exceeded max attempts"
+            )
+            return [85, 0]
+
+        try:
+            with open(
+                f"/sys/bus/w1/devices/{sensor_id}/w1_slave",
+                "r"
+            ) as f:
+                text = f.read()
+
+        except Exception as e:
+            logger.error(
+                f"Sensor read error {sensor_id}: {e}"
+            )
+            return [85, 0]
+
+        lines = text.split("\n")
+
+        # --------------------------------------------------------------------
+        # CRC CHECK
+        # --------------------------------------------------------------------
+
+        if "YES" not in lines[0]:
+
+            crc_failures += 1
+
+            logger.warning(
+                f"CRC failure for sensor {sensor_id} "
+                f"(failure {crc_failures}/{max_crc_failures})"
+            )
+
+            if crc_failures >= max_crc_failures:
+                logger.error(
+                    f"Sensor {sensor_id} exceeded CRC retry limit"
+                )
+                return [85, 0]
+
+            time.sleep(0.1)
+            continue
+
+        # CRC success resets counter
+        crc_failures = 0
+
+        # --------------------------------------------------------------------
+        # PARSE TEMPERATURE
+        # --------------------------------------------------------------------
+
+        try:
+            second_line = lines[1]
+            temp_raw = second_line.split(" ")[9]
+            temp_c = float(temp_raw[2:]) / 1000.0
+
+        except Exception as e:
+            logger.error(
+                f"Temperature parse error {sensor_id}: {e}"
+            )
+            continue
+
+        # --------------------------------------------------------------------
+        # DISCARD KNOWN BAD VALUES
+        # --------------------------------------------------------------------
+
+        # DS18B20 startup glitch
+        if temp_c == 85.0:
+
+            logger.warning(
+                f"Discarded 85.0C glitch reading "
+                f"from sensor {sensor_id}"
+            )
+
+            continue
+
+        # Physically impossible values
+        if temp_c < -50 or temp_c > 100:
+
+            logger.warning(
+                f"Discarded out-of-range reading "
+                f"{temp_c:.2f}C from sensor {sensor_id}"
+            )
+
+            continue
+
+        temperatures.append(temp_c)
+
+        time.sleep(0.05)
+
+    # ------------------------------------------------------------------------
+    # TRIM OUTLIERS
+    # ------------------------------------------------------------------------
+
+    temperatures.sort()
+
+    logger.info(
+        f"Sensor {sensor_id} raw readings: "
+        f"{[round(t, 3) for t in temperatures]}"
+    )
+
+    # Drop lowest and highest values
+    trimmed = temperatures[1:-1]
+
+    avg_temp = sum(trimmed) / len(trimmed)
+
+    logger.info(
+        f"Sensor {sensor_id} trimmed readings: "
+        f"{[round(t, 3) for t in trimmed]} "
+        f"average={avg_temp:.3f}"
+    )
+
+    return [avg_temp, 1]
+
+
+# ============================================================================
+# READ SENSOR VALUES
+# ============================================================================
+
 FrontTempC = getavgtemp(FrontTempSensor)
 BackTempC = getavgtemp(BackTempSensor)
 PiTempC = getavgtemp(PiTempSensor)
 OutsideTempC = getavgtemp(OutsideTempSensor)
 WoodStoveTempC = getavgtemp(WoodStoveTempSensor)
+
 AvgTemps = []
-AvgTempC = []
 
-# Convert readings to *F and mask to 2 decimal places.
-TWOPLACES = Decimal(10) ** -2       # same as Decimal('0.01')
 
-if FrontTempC[1] == 1:
-    FrontTempC = Decimal(FrontTempC[0]).quantize(TWOPLACES)
-    FrontTempF = ((FrontTempC*9)/5)+32
-    FrontTempF = Decimal(FrontTempF).quantize(TWOPLACES)
-    AvgTemps.append(FrontTempC)
-    FrontTempError = 1
-else:
-    FrontTempError = 0
+# ============================================================================
+# UTC TIMESTAMP (timezone-aware)
+# ============================================================================
 
-if BackTempC[1] == 1:
-    BackTempC = Decimal(BackTempC[0]).quantize(TWOPLACES)
-    BackTempF = ((BackTempC*9)/5)+32
-    BackTempF = Decimal(BackTempF).quantize(TWOPLACES)
-    AvgTemps.append(BackTempC)
-    BackTempError = 1
-else:
-    BackTempError = 0
+timestamp = datetime.now(timezone.utc)
 
-if PiTempC[1] == 1:
-    PiTempC = Decimal(PiTempC[0]).quantize(TWOPLACES)
-    PiTempF = ((PiTempC*9)/5)+32
-    PiTempF = Decimal(PiTempF).quantize(TWOPLACES)
-#    AvgTemps.append(PiTempC)
-    PiTempError = 1
-else:
-    PiTempError = 0
 
-if not AvgTemps:
-    AvgTempError = 0
-else:
-    AvgTemps = sorted(AvgTemps)
-    AvgTempC.append(sum(AvgTemps) / int(len(AvgTemps)))
-    AvgTempC = Decimal(AvgTempC[0]).quantize(TWOPLACES)
-    AvgTempF = ((AvgTempC*9)/5)+32
-    AvgTempF = Decimal(AvgTempF).quantize(TWOPLACES)
-    AvgTempError = 1
+# ============================================================================
+# DATABASE UPDATE
+# ============================================================================
 
-if OutsideTempC[1] == 1:
-    OutsideTempC = Decimal(OutsideTempC[0]).quantize(TWOPLACES)
-    OutsideTempF = ((OutsideTempC*9)/5)+32
-    OutsideTempF = Decimal(OutsideTempF).quantize(TWOPLACES)
-    OutsideTempError = 1
-else:
-    OutsideTempError = 0
-
-if WoodStoveTempC[1] == 1:
-    WoodStoveTempC = Decimal(WoodStoveTempC[0]).quantize(TWOPLACES)
-    WoodStoveTempF = ((WoodStoveTempC*9)/5)+32
-    WoodStoveTempF = Decimal(WoodStoveTempF).quantize(TWOPLACES)
-    WoodStoveTempError = 1
-else:
-    WoodStoveTempError = 0
-
-timestamp = datetime.utcnow()
+con = None
 
 try:
-    con = mdb.connect('localhost', 'root', 'change_this_password', 'greenhouse');
+
+    con = pymysql.connect(
+        host="localhost",
+        user="root",
+        password="change_this_password",
+        database="greenhouse",
+        cursorclass=pymysql.cursors.Cursor,
+        autocommit=False
+    )
+
     cur = con.cursor()
-    if FrontTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (BackTempC, BackTempF, timestamp, "BackTemp"))
-        print "Number of rows updated:",  cur.rowcount
-    if BackTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (FrontTempC, FrontTempF, timestamp, "FrontTemp"))
-        print "Number of rows updated:",  cur.rowcount
-    if PiTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (PiTempC, PiTempF, timestamp, "PiTemp"))
-        print "Number of rows updated:",  cur.rowcount
-    if AvgTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (AvgTempC, AvgTempF, timestamp, "AverageInsideTemp"))
-        print "Number of rows updated:",  cur.rowcount
-    if OutsideTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (OutsideTempC, OutsideTempF, timestamp, "OutsideTemp"))
-        print "Number of rows updated:",  cur.rowcount
-    if WoodStoveTempError == 1:
-        cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE Name = %s",
-            (WoodStoveTempC, WoodStoveTempF, timestamp, "WoodstoveTemp"))
-        print "Number of rows updated:",  cur.rowcount
+
+    # ------------------------------------------------------------------------
+    # FRONT TEMP
+    # ------------------------------------------------------------------------
+
+    if FrontTempC[1] == 1:
+
+        front_c = d(FrontTempC[0])
+        front_f = to_f(front_c)
+
+        AvgTemps.append(front_c)
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                front_c,
+                front_f,
+                timestamp,
+                "FrontTemp"
+            )
+        )
+
+        logger.info("FrontTemp updated")
+
+    # ------------------------------------------------------------------------
+    # BACK TEMP
+    # ------------------------------------------------------------------------
+
+    if BackTempC[1] == 1:
+
+        back_c = d(BackTempC[0])
+        back_f = to_f(back_c)
+
+        AvgTemps.append(back_c)
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                back_c,
+                back_f,
+                timestamp,
+                "BackTemp"
+            )
+        )
+
+        logger.info("BackTemp updated")
+
+    # ------------------------------------------------------------------------
+    # PI TEMP
+    # ------------------------------------------------------------------------
+
+    if PiTempC[1] == 1:
+
+        pi_c = d(PiTempC[0])
+        pi_f = to_f(pi_c)
+
+        # Intentionally NOT included in AvgTemps
+        # Preserved from original logic
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                pi_c,
+                pi_f,
+                timestamp,
+                "PiTemp"
+            )
+        )
+
+        logger.info("PiTemp updated")
+
+    # ------------------------------------------------------------------------
+    # AVERAGE INSIDE TEMP
+    # ------------------------------------------------------------------------
+
+    if AvgTemps:
+
+        avg_c = d(sum(AvgTemps) / len(AvgTemps))
+        avg_f = to_f(avg_c)
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                avg_c,
+                avg_f,
+                timestamp,
+                "AverageInsideTemp"
+            )
+        )
+
+        logger.info("AverageInsideTemp updated")
+
+    # ------------------------------------------------------------------------
+    # OUTSIDE TEMP
+    # ------------------------------------------------------------------------
+
+    if OutsideTempC[1] == 1:
+
+        outside_c = d(OutsideTempC[0])
+        outside_f = to_f(outside_c)
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                outside_c,
+                outside_f,
+                timestamp,
+                "OutsideTemp"
+            )
+        )
+
+        logger.info("OutsideTemp updated")
+
+    # ------------------------------------------------------------------------
+    # WOOD STOVE TEMP
+    # ------------------------------------------------------------------------
+
+    if WoodStoveTempC[1] == 1:
+
+        wood_c = d(WoodStoveTempC[0])
+        wood_f = to_f(wood_c)
+
+        cur.execute(
+            """
+            UPDATE currenttemp
+            SET temperature=%s,
+                temperatureF=%s,
+                timestamp=%s
+            WHERE Name=%s
+            """,
+            (
+                wood_c,
+                wood_f,
+                timestamp,
+                "WoodstoveTemp"
+            )
+        )
+
+        logger.info("WoodstoveTemp updated")
+
     con.commit()
 
-except mdb.Error, e:
+    logger.info("Database commit successful")
+
+# ============================================================================
+# DATABASE ERRORS
+# ============================================================================
+
+except pymysql.MySQLError as e:
+
+    logger.error(f"MySQL error: {e}")
+
     if con:
         con.rollback()
-    print "Error %d: %s" % (e.args[0],e.args[1])
+
     sys.exit(1)
 
+# ============================================================================
+# GENERAL ERRORS
+# ============================================================================
+
+except Exception as e:
+
+    logger.exception(f"Unexpected error: {e}")
+
+    if con:
+        con.rollback()
+
+    sys.exit(1)
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
 finally:
+
     if con:
         con.close()
-
