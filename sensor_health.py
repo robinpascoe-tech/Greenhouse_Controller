@@ -1,15 +1,43 @@
 #!/usr/bin/env python3
 
+"""
+Sensor Health Engine v3.2
+
+Predictive telemetry system for DS18B20 sensors.
+
+Improvements over v3.1:
+- Renamed noise_ratio → instability_ratio (clarity fix)
+- Added sensor-type baselines (context-aware scoring)
+- Restored email alert system (with cooldown protection)
+- Fully commented for long-term maintainability
+"""
+
 import pymysql
 import statistics
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
 
 
 # ============================================================
-# DB
+# EMAIL CONFIGURATION (EXTERNAL ALERT SYSTEM)
+# ============================================================
+
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 587
+EMAIL_USER = "your_email@gmail.com"
+EMAIL_PASS = "your_app_password"
+ALERT_RECIPIENT = "your_email@gmail.com"
+
+ALERT_COOLDOWN_HOURS = 6
+
+
+# ============================================================
+# DATABASE CONNECTION
 # ============================================================
 
 def db():
+    """Create MySQL connection (cron-safe, lightweight)."""
     return pymysql.connect(
         host="localhost",
         user="root",
@@ -21,10 +49,69 @@ def db():
 
 
 # ============================================================
-# FETCH (PYTHON-CONTROLLED WINDOW)
+# EMAIL ALERT FUNCTION
+# ============================================================
+
+def send_email(subject, body):
+    """Send alert email via SMTP."""
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = ALERT_RECIPIENT
+
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, ALERT_RECIPIENT, msg.as_string())
+        server.quit()
+    except Exception as e:
+        print(f"[ALERT ERROR] Email failed: {e}")
+
+
+# ============================================================
+# SENSOR TYPE BASLINES (NEW FEATURE)
+# ============================================================
+
+def sensor_type(sensor_name):
+    """
+    Defines expected behavior profile per sensor type.
+
+    This prevents false positives from inherently noisy sensors.
+    """
+
+    outdoor = ["OutsideTemp"]
+    high_variance = ["WoodStoveTemp"]
+
+    if sensor_name in outdoor:
+        return "outdoor"
+    if sensor_name in high_variance:
+        return "high_variance"
+    return "indoor"
+
+
+def baseline_adjustments(sensor_type):
+    """
+    Adjusts thresholds based on sensor environment.
+    """
+
+    if sensor_type == "outdoor":
+        return {"variance_mult": 1.5, "drift_mult": 1.3}
+
+    if sensor_type == "high_variance":
+        return {"variance_mult": 2.0, "drift_mult": 1.8}
+
+    return {"variance_mult": 1.0, "drift_mult": 1.0}
+
+
+# ============================================================
+# DATA FETCHING (TIME-BASED WINDOWS)
 # ============================================================
 
 def fetch(cur, sensor, hours):
+    """
+    Pull sensor diagnostics for a rolling time window.
+    """
     start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     cur.execute("""
@@ -39,6 +126,12 @@ def fetch(cur, sensor, hours):
 
 
 def parse(rows):
+    """
+    Convert DB rows into:
+    - float temperature values
+    - CRC failure counts
+    """
+
     values = []
     crc = []
 
@@ -50,20 +143,27 @@ def parse(rows):
 
 
 # ============================================================
-# FEATURE ENGINEERING (CLEANED)
+# FEATURE ENGINEERING (TIME-SERIES INTELLIGENCE)
 # ============================================================
 
 def features(cur, sensor):
+    """
+    Extracts multi-window statistical features:
+    - short term (1h)
+    - medium term (6h)
+    - long term (24h)
+    """
 
-    w1_rows = fetch(cur, sensor, 1)
-    w6_rows = fetch(cur, sensor, 6)
-    w24_rows = fetch(cur, sensor, 24)
+    w1 = fetch(cur, sensor, 1)
+    w6 = fetch(cur, sensor, 6)
+    w24 = fetch(cur, sensor, 24)
 
-    w1, crc1 = parse(w1_rows)
-    w6, _ = parse(w6_rows)
-    w24, _ = parse(w24_rows)
+    w1_vals, w1_crc = parse(w1)
+    w6_vals, _ = parse(w6)
+    w24_vals, _ = parse(w24)
 
-    if len(w1) < 8:
+    # Require minimum data for stability
+    if len(w1_vals) < 8:
         return None
 
     def stats(x):
@@ -73,40 +173,44 @@ def features(cur, sensor):
             "n": len(x)
         }
 
-    s1, s6, s24 = stats(w1), stats(w6), stats(w24)
-
-    crc_rate = sum(crc1) / max(1, len(crc1))
+    s1, s6, s24 = stats(w1_vals), stats(w6_vals), stats(w24_vals)
 
     return {
         "variance": s1["var"],
         "drift_short": abs(s1["median"] - s6["median"]),
         "drift_long": abs(s1["median"] - s24["median"]),
         "sample_size": s1["n"],
-        "noise_ratio": len(set(w1)) / max(1, len(w1)),
-        "crc_rate": crc_rate
+
+        # RENAMED for clarity (was noise_ratio)
+        "instability_ratio": len(set(w1_vals)) / max(1, len(w1_vals)),
+
+        "crc_rate": sum(w1_crc) / max(1, len(w1_crc))
     }
 
 
 # ============================================================
-# CONFIDENCE MODEL (IMPROVED)
+# CONFIDENCE MODEL (DATA QUALITY ESTIMATION)
 # ============================================================
 
 def confidence(f):
+    """
+    Estimates reliability of computed metrics.
+    """
 
     if not f:
         return 0.0
 
     sample_factor = min(1.0, f["sample_size"] / 20)
-    noise_factor = 1.0 - f["noise_ratio"]
+    stability_factor = 1.0 - f["instability_ratio"]
 
-    return round((sample_factor * 0.7 + noise_factor * 0.3), 3)
+    return round((sample_factor * 0.7 + stability_factor * 0.3), 3)
 
 
 # ============================================================
-# SCORING (EMA-INTEGRATED)
+# HEALTH SCORING (WITH SENSOR BASELINES)
 # ============================================================
 
-def score(f, ema_health):
+def score(f, ema_health, sensor_type_info):
 
     if not f:
         return 0, "no data"
@@ -114,25 +218,27 @@ def score(f, ema_health):
     score = 100
     notes = []
 
-    # EMA influence (IMPORTANT v3.1 FIX)
+    # Apply EMA smoothing (system memory influence)
     if ema_health:
         score = (score * 0.7) + (ema_health * 0.3)
 
-    # variance
-    if f["variance"] > 1.0:
+    adj = baseline_adjustments(sensor_type_info)
+
+    # Variance (adjusted by sensor type)
+    if f["variance"] > 1.0 * adj["variance_mult"]:
         score -= 20
         notes.append("high noise")
 
-    # drift
-    if f["drift_short"] > 0.8:
+    # Drift detection (adjusted thresholds)
+    if f["drift_short"] > 0.8 * adj["drift_mult"]:
         score -= 15
         notes.append("short drift")
 
-    if f["drift_long"] > 1.2:
+    if f["drift_long"] > 1.2 * adj["drift_mult"]:
         score -= 20
         notes.append("long drift")
 
-    # CRC (now properly integrated)
+    # CRC instability (strong failure signal)
     if f["crc_rate"] > 0.3:
         score -= 25
         notes.append("crc instability")
@@ -143,10 +249,13 @@ def score(f, ema_health):
 
 
 # ============================================================
-# STATUS MACHINE (RECOVERY FIXED)
+# STATE MACHINE (WITH RECOVERY LOGIC)
 # ============================================================
 
 def decide(new_score, prev_status):
+    """
+    Converts score into system state with hysteresis.
+    """
 
     if new_score >= 90:
         return "HEALTHY"
@@ -163,10 +272,64 @@ def decide(new_score, prev_status):
 
 
 # ============================================================
-# STATE UPDATE (FIXED EMA + RECOVERY)
+# ALERT SYSTEM (EMAIL + COOLDOWN)
+# ============================================================
+
+def can_alert(cur, sensor):
+    """
+    Prevents alert spam using cooldown window.
+    """
+
+    cur.execute("""
+        SELECT last_change_time
+        FROM sensor_state
+        WHERE sensor_name=%s
+    """, (sensor,))
+
+    row = cur.fetchone()
+
+    if not row:
+        return True
+
+    last_time = row[0]
+
+    if not last_time:
+        return True
+
+    delta = (datetime.now(timezone.utc) - last_time).total_seconds()
+
+    return delta > ALERT_COOLDOWN_HOURS * 3600
+
+
+def alert(cur, sensor, status, score):
+    """
+    Sends external notification (email).
+    """
+
+    if not can_alert(cur, sensor):
+        return
+
+    subject = f"[GREENHOUSE ALERT] {sensor} → {status}"
+
+    body = f"""
+Sensor: {sensor}
+Status: {status}
+Health Score: {score}
+
+Time: {datetime.now(timezone.utc)}
+"""
+
+    send_email(subject, body)
+
+
+# ============================================================
+# STATE UPDATE (EMA + MEMORY)
 # ============================================================
 
 def update_state(cur, sensor, score, status):
+    """
+    Stores persistent sensor memory (EMA + last state).
+    """
 
     cur.execute("""
         SELECT last_status, ema_health
@@ -188,7 +351,7 @@ def update_state(cur, sensor, score, status):
 
     ema = (ema or score) * 0.8 + score * 0.2
 
-    # RECOVERY IS NOW PERSISTENT
+    # Recovery detection
     if last_status in ["DEGRADED", "CRITICAL"] and score >= 85:
         status = "RECOVERED"
 
@@ -230,7 +393,9 @@ def main():
         prev_status = prev[0] if prev else None
         ema = prev[1] if prev else None
 
-        health, notes = score(f, ema)
+        s_type = sensor_type(sensor)
+
+        health, notes = score(f, ema, s_type)
         status = decide(health, prev_status)
 
         conf = confidence(f)
@@ -255,6 +420,10 @@ def main():
         ))
 
         update_state(cur, sensor, health, status)
+
+        # External alert system (RESTORED)
+        if status in ["DEGRADED", "CRITICAL", "RECOVERED"]:
+            alert(cur, sensor, status, health)
 
     con.close()
 
