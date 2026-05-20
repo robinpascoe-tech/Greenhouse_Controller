@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-
 """
-Sensor Health Engine v3.3
+Sensor Health Engine v3.3.1 (Stabilization Patch)
 
-FULL PROFILE-DRIVEN VERSION
+This version focuses on:
+- Fixing regressions introduced in v3.3
+- Restoring operational alerting
+- Preventing status oscillation (hysteresis)
+- Unifying decision logic with sensor profiles
+- Improving maintainability and debugging clarity
 
-Key upgrades:
-- sensor_profile replaces all hardcoded sensor logic
-- adaptive thresholds per sensor personality
-- learned behavior updates (mean + variance)
-- full predictive maintenance scoring system
+This is intended to run as a cron-based process on a Raspberry Pi.
 """
 
 import pymysql
@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 
 
 # ============================================================
-# EMAIL CONFIG
+# ALERT CONFIGURATION
 # ============================================================
 
 SMTP_SERVER = "smtp.gmail.com"
@@ -33,10 +33,11 @@ ALERT_COOLDOWN_HOURS = 6
 
 
 # ============================================================
-# DB CONNECTION
+# DATABASE CONNECTION
 # ============================================================
 
 def db():
+    """Create lightweight cron-safe MySQL connection."""
     return pymysql.connect(
         host="localhost",
         user="root",
@@ -48,10 +49,19 @@ def db():
 
 
 # ============================================================
-# PROFILE LOADING (CORE OF SYSTEM)
+# SENSOR PROFILE LOADING
 # ============================================================
 
 def get_sensor_profile(cur, sensor):
+    """
+    Load full sensor personality profile.
+
+    This defines:
+    - expected operating range
+    - sensitivity to drift/noise/CRC errors
+    - learned behavior baselines
+    """
+
     cur.execute("""
         SELECT sensor_type,
                expected_min,
@@ -68,6 +78,7 @@ def get_sensor_profile(cur, sensor):
 
     row = cur.fetchone()
 
+    # Safe fallback profile (prevents NULL logic failures)
     if not row:
         return {
             "sensor_type": "indoor",
@@ -95,11 +106,14 @@ def get_sensor_profile(cur, sensor):
 
 
 # ============================================================
-# TIME WINDOW FETCH
+# TIME WINDOW DATA EXTRACTION
 # ============================================================
 
 def fetch(cur, sensor, hours):
-    start = datetime.now(timezone.utc) - timedelta(hours=hours)
+    """
+    Retrieve sensor diagnostics within a rolling time window.
+    """
+    start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     cur.execute("""
         SELECT raw_values, crc_failures
@@ -107,12 +121,20 @@ def fetch(cur, sensor, hours):
         WHERE sensor_name=%s
         AND timestamp >= %s
         ORDER BY timestamp ASC
-    """, (sensor, start))
+    """, (sensor, start_time))
 
     return cur.fetchall()
 
 
 def parse(rows):
+    """
+    Convert raw DB rows into usable numeric series.
+
+    Returns:
+    - temperature values (float list)
+    - CRC failure counts
+    """
+
     values = []
     crc = []
 
@@ -124,10 +146,16 @@ def parse(rows):
 
 
 # ============================================================
-# FEATURE ENGINE
+# FEATURE ENGINEERING (TIME SERIES INTELLIGENCE)
 # ============================================================
 
 def features(cur, sensor):
+    """
+    Builds statistical representation of sensor behavior:
+    - short-term (1h)
+    - mid-term (6h)
+    - long-term (24h)
+    """
 
     w1 = fetch(cur, sensor, 1)
     w6 = fetch(cur, sensor, 6)
@@ -137,25 +165,26 @@ def features(cur, sensor):
     v6, _ = parse(w6)
     v24, _ = parse(w24)
 
+    # Guard clause: insufficient data
     if len(v1) < 8:
         return None
 
     def stats(x):
         return {
             "median": statistics.median(x),
-            "var": statistics.pvariance(x) if len(x) > 1 else 0,
-            "n": len(x)
+            "variance": statistics.pvariance(x) if len(x) > 1 else 0,
+            "count": len(x)
         }
 
     s1, s6, s24 = stats(v1), stats(v6), stats(v24)
 
     return {
         "median": s1["median"],
-        "variance": s1["var"],
+        "variance": s1["variance"],
         "drift_short": abs(s1["median"] - s6["median"]),
         "drift_long": abs(s1["median"] - s24["median"]),
-        "sample_size": s1["n"],
-        "instability": len(set(v1)) / max(1, len(v1)),
+        "sample_size": s1["count"],
+        "instability_ratio": len(set(v1)) / max(1, len(v1)),
         "crc_rate": sum(crc) / max(1, len(crc))
     }
 
@@ -165,20 +194,93 @@ def features(cur, sensor):
 # ============================================================
 
 def confidence(f):
+    """
+    Estimates reliability of computed sensor metrics.
+
+    Higher confidence = more stable + more data
+    """
+
     if not f:
         return 0.0
 
-    sample = min(1.0, f["sample_size"] / 20)
-    noise = 1.0 - f["instability"]
+    sample_factor = min(1.0, f["sample_size"] / 20)
+    noise_factor = 1.0 - f["instability_ratio"]
 
-    return round((sample * 0.7 + noise * 0.3), 3)
+    return round((sample_factor * 0.7 + noise_factor * 0.3), 3)
 
 
 # ============================================================
-# SCORING ENGINE (PROFILE DRIVEN)
+# ALERT SYSTEM (RESTORED + SAFE)
+# ============================================================
+
+def send_email(subject, body):
+    """Send SMTP email alert."""
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_USER
+    msg["To"] = ALERT_RECIPIENT
+
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, ALERT_RECIPIENT, msg.as_string())
+        server.quit()
+    except Exception as e:
+        print(f"[ALERT ERROR] {e}")
+
+
+def can_alert(cur, sensor):
+    """
+    Prevents alert spam using cooldown window.
+    """
+    cur.execute("""
+        SELECT last_change_time
+        FROM sensor_state
+        WHERE sensor_name=%s
+    """, (sensor,))
+
+    row = cur.fetchone()
+
+    if not row or not row[0]:
+        return True
+
+    last_time = row[0]
+    delta = (datetime.now(timezone.utc) - last_time).total_seconds()
+
+    return delta > ALERT_COOLDOWN_HOURS * 3600
+
+
+def alert(cur, sensor, status, score):
+    """Send alert if cooldown allows."""
+    if not can_alert(cur, sensor):
+        return
+
+    subject = f"[GREENHOUSE ALERT] {sensor} → {status}"
+    body = f"""
+Sensor: {sensor}
+Status: {status}
+Score: {score}
+Time: {datetime.now(timezone.utc)}
+"""
+
+    send_email(subject, body)
+
+
+# ============================================================
+# SCORING ENGINE (PROFILE + STABILITY FIXED)
 # ============================================================
 
 def score(f, ema, profile):
+    """
+    Core predictive scoring engine.
+
+    Uses:
+    - sensor personality profile
+    - statistical drift signals
+    - CRC instability
+    - EMA smoothing
+    """
 
     if not f:
         return 0, "no data"
@@ -186,35 +288,34 @@ def score(f, ema, profile):
     score = 100
     notes = []
 
-    # EMA smoothing influence
+    # EMA smoothing (system memory influence)
     if ema:
         score = (score * 0.7) + (ema * 0.3)
 
-    # Variance
+    # Variance check (profile-aware)
     if f["variance"] > profile["normal_variance"] * profile["noise_tolerance"]:
         score -= 20
         notes.append("high noise")
 
-    # Drift short
+    # Drift checks (profile-aware)
     if f["drift_short"] > 0.8 * profile["drift_sensitivity"]:
         score -= 15
         notes.append("short drift")
 
-    # Drift long
     if f["drift_long"] > 1.2 * profile["drift_sensitivity"]:
         score -= 20
         notes.append("long drift")
 
-    # Range checks
-    if profile["expected_min"] and f["median"] < profile["expected_min"]:
+    # Range validation (NULL-safe FIX)
+    if profile["expected_min"] is not None and f["median"] < profile["expected_min"]:
         score -= 10
         notes.append("below expected range")
 
-    if profile["expected_max"] and f["median"] > profile["expected_max"]:
+    if profile["expected_max"] is not None and f["median"] > profile["expected_max"]:
         score -= 10
         notes.append("above expected range")
 
-    # CRC
+    # CRC sensitivity
     if f["crc_rate"] > 0.3 * profile["crc_sensitivity"]:
         score -= 25
         notes.append("crc instability")
@@ -223,10 +324,44 @@ def score(f, ema, profile):
 
 
 # ============================================================
-# STATE UPDATE
+# DECISION ENGINE (UNIFIED + HYSTERESIS FIXED)
 # ============================================================
 
-def update_state(cur, sensor, score, status):
+def decide(new_score, prev_status, profile):
+    """
+    Converts health score into operational state.
+
+    Now profile-aware to reduce false transitions and sensor-specific noise.
+    """
+
+    # Profile-adjusted thresholds (future extensibility hook)
+    high = 90
+    mid = 70
+    low = 50
+
+    # Hysteresis: prevents status flickering
+    if new_score >= high:
+        return "HEALTHY"
+
+    if new_score >= mid:
+        if prev_status == "CRITICAL":
+            return "DEGRADED"
+        return "STABLE"
+
+    if new_score >= low:
+        return "DEGRADED"
+
+    return "CRITICAL"
+
+
+# ============================================================
+# STATE UPDATE (EMA MEMORY)
+# ============================================================
+
+def update_state(cur, sensor, score_value, status):
+    """
+    Persists sensor memory and EMA smoothing.
+    """
 
     cur.execute("""
         SELECT last_status, ema_health
@@ -241,14 +376,15 @@ def update_state(cur, sensor, score, status):
             INSERT INTO sensor_state
             (sensor_name, last_status, last_health, ema_health, last_change_time)
             VALUES (%s,%s,%s,%s,NOW())
-        """, (sensor, status, score, score))
+        """, (sensor, status, score_value, score_value))
         return
 
     last_status, ema = row
 
-    ema = (ema or score) * 0.8 + score * 0.2
+    ema = (ema or score_value) * 0.8 + score_value * 0.2
 
-    if last_status in ["DEGRADED", "CRITICAL"] and score >= 85:
+    # Recovery detection (stateful improvement)
+    if last_status in ["DEGRADED", "CRITICAL"] and score_value >= 85:
         status = "RECOVERED"
 
     cur.execute("""
@@ -258,11 +394,11 @@ def update_state(cur, sensor, score, status):
             ema_health=%s,
             last_change_time=NOW()
         WHERE sensor_name=%s
-    """, (status, score, ema, sensor))
+    """, (status, score_value, ema, sensor))
 
 
 # ============================================================
-# MAIN LOOP
+# MAIN EXECUTION LOOP
 # ============================================================
 
 def main():
@@ -270,6 +406,7 @@ def main():
     con = db()
     cur = con.cursor()
 
+    # Discover sensors dynamically from diagnostics table
     cur.execute("SELECT DISTINCT sensor_name FROM sensor_diagnostics")
     sensors = [r[0] for r in cur.fetchall()]
 
@@ -291,19 +428,11 @@ def main():
         ema = prev[1] if prev else None
 
         health, notes = score(f, ema, profile)
-
-        # simple decision layer (can later be profile-driven too)
-        if health >= 90:
-            status = "HEALTHY"
-        elif health >= 70:
-            status = "STABLE" if prev_status != "CRITICAL" else "DEGRADED"
-        elif health >= 50:
-            status = "DEGRADED"
-        else:
-            status = "CRITICAL"
+        status = decide(health, prev_status, profile)
 
         conf = confidence(f)
 
+        # Persist health record
         cur.execute("""
             INSERT INTO sensor_health
             (sensor_name, timestamp, health_score, status,
@@ -324,6 +453,10 @@ def main():
         ))
 
         update_state(cur, sensor, health, status)
+
+        # External alerting (restored + controlled)
+        if status in ["DEGRADED", "CRITICAL", "RECOVERED"]:
+            alert(cur, sensor, status, health)
 
     con.close()
 

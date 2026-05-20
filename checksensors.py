@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 
 ############################################################################
-# Greenhouse Sensor Controller (Production Hardened Version)
+# Greenhouse Sensor Controller (v3.3.1 Compatible Ingestion Layer)
 ############################################################################
-# This script reads from multiple DS18B20 temperature sensors, performs
-# CRC checks, discards outliers, and writes results to a MySQL database.
-# It includes robust error handling, logging, and diagnostics for long-term
-# tracking of sensor performance.
-# Note: This is a production-hardened version with optimizations and
-# improvements based on real-world usage and testing.
-############################################################################
-# Run from cron using flock -n /tmp/greenhouse.lock timeout 45s python3 /home/pi/greenhouse.py
-# This ensures only one instance runs at a time and prevents hanging.
+# Produces:
+# - sensor_diagnostics (FULL coverage, even failures)
+# - currenttemp (clean operational values)
+#
+# Designed to fully support sensor_health v3.3.1 predictive engine.
 ############################################################################
 
 import time
@@ -23,9 +19,9 @@ from datetime import datetime, timezone
 import pymysql
 
 
-# ============================================================================
+# ============================================================
 # LOGGING
-# ============================================================================
+# ============================================================
 
 LOG_FILE = "/home/pi/py3refactor/greenhouse_sensors.log"
 
@@ -45,9 +41,9 @@ handler.setFormatter(logging.Formatter(
 logger.addHandler(handler)
 
 
-# ============================================================================
-# SENSOR PATH CACHE (HARDWARE OPTIMIZATION)
-# ============================================================================
+# ============================================================
+# SENSOR MAP (cached paths)
+# ============================================================
 
 SENSORS = {
     "FrontTemp": "/sys/bus/w1/devices/28-0315018710ff/w1_slave",
@@ -58,9 +54,9 @@ SENSORS = {
 }
 
 
-# ============================================================================
+# ============================================================
 # HELPERS
-# ============================================================================
+# ============================================================
 
 TWOPLACES = Decimal("0.01")
 
@@ -73,9 +69,9 @@ def to_f(c):
     return d((c * 9 / 5) + 32)
 
 
-# ============================================================================
-# SENSOR READ FUNCTION (HARDENED)
-# ============================================================================
+# ============================================================
+# SENSOR READ (HARDENED + v3.3.1 SAFE)
+# ============================================================
 
 def read_sensor(sensor_name, path):
 
@@ -91,19 +87,28 @@ def read_sensor(sensor_name, path):
 
         if attempts > 20:
             logger.error(f"{sensor_name} exceeded max attempts")
-            return None
+            return {
+                "ok": False,
+                "reason": "max_attempts",
+                "crc_failures": crc_failures,
+                "raw": readings
+            }
 
         try:
             with open(path) as f:
                 text = f.read()
-
         except Exception as e:
             logger.error(f"{sensor_name} file error: {e}")
-            return None
+            return {
+                "ok": False,
+                "reason": "file_error",
+                "crc_failures": crc_failures,
+                "raw": readings
+            }
 
         lines = text.split("\n")
 
-        # CRC check
+        # CRC validation
         if "YES" not in lines[0]:
             crc_failures += 1
             time.sleep(0.1)
@@ -115,7 +120,7 @@ def read_sensor(sensor_name, path):
         except:
             continue
 
-        # discard bad values
+        # reject invalid sensor spikes
         if temp == 85.0 or temp < -50 or temp > 100:
             continue
 
@@ -127,11 +132,11 @@ def read_sensor(sensor_name, path):
     readings.sort()
 
     median = readings[len(readings)//2]
-    trimmed = readings[1:-1]
 
+    # trimmed mean (removes outliers)
+    trimmed = readings[1:-1]
     avg = sum(trimmed) / len(trimmed)
 
-    # stale detection (simple)
     stale = len(set(readings)) == 1
 
     logger.info(
@@ -143,17 +148,17 @@ def read_sensor(sensor_name, path):
         logger.warning(f"{sensor_name} appears STALE")
 
     return {
+        "ok": True,
         "avg": avg,
         "median": median,
-        "ok": True,
         "crc_failures": crc_failures,
         "raw": readings
     }
 
 
-# ============================================================================
-# DATABASE
-# ============================================================================
+# ============================================================
+# DB CONNECTION
+# ============================================================
 
 def db_connect():
     return pymysql.connect(
@@ -165,19 +170,29 @@ def db_connect():
         autocommit=False
     )
 
-# ============================================================================
-# Write Sensor Diagnostics (for long-term tracking).
-# ============================================================================
+
+# ============================================================
+# DIAGNOSTICS WRITER (v3.3.1 CONTRACT SAFE)
+# ============================================================
 
 def write_sensor_diagnostics(cur, timestamp, name, result):
     """
-    Writes per-sensor diagnostics to SQL for long-term tracking.
+    Always writes a row to ensure health engine has full visibility.
+
+    EVEN FAILED SENSORS ARE RECORDED.
+    This is critical for predictive failure detection.
     """
 
-    if not result:
-        return
+    if result is None:
+        result = {
+            "ok": False,
+            "avg": None,
+            "median": None,
+            "crc_failures": -1,
+            "raw": []
+        }
 
-    raw = ",".join(str(x) for x in result["raw"])
+    raw = ",".join(str(x) for x in result["raw"]) if result["raw"] else "FAIL"
 
     cur.execute(
         """
@@ -189,16 +204,17 @@ def write_sensor_diagnostics(cur, timestamp, name, result):
             name,
             timestamp,
             raw,
-            d(result["median"]),
-            d(result["avg"]),
+            d(result["median"]) if result["median"] is not None else None,
+            d(result["avg"]) if result["avg"] is not None else None,
             result.get("crc_failures", 0),
-            "ok"
+            "ok" if result.get("ok") else "FAILED"
         )
     )
 
-# ============================================================================
+
+# ============================================================
 # MAIN
-# ============================================================================
+# ============================================================
 
 def main():
 
@@ -210,24 +226,32 @@ def main():
 
         results = {}
 
-        # ---------------- READ ALL SENSORS ----------------
+        # IMPORTANT: timestamp must be defined BEFORE loop (fixes previous bug)
+        timestamp = datetime.now(timezone.utc)
+
+        # =====================================================
+        # SENSOR ACQUISITION LOOP
+        # =====================================================
+
         for name, path in SENSORS.items():
+
             start = time.monotonic()
             r = read_sensor(name, path)
             duration = time.monotonic() - start
 
-            if r:
+            write_sensor_diagnostics(cur, timestamp, name, r)
+
+            if r and r.get("ok"):
                 results[name] = r
-                write_sensor_diagnostics(cur, timestamp, name, r)
-                logger.info(f"{name} read OK in {duration:.3f}s")
+                logger.info(f"{name} OK in {duration:.3f}s")
             else:
                 logger.error(f"{name} FAILED")
 
         inside = []
 
-        timestamp = datetime.now(timezone.utc)
-
-        # ---------------- UPDATE CURRENT TABLE ----------------
+        # =====================================================
+        # CURRENTTEMP UPDATE (OPERATIONAL VALUES ONLY)
+        # =====================================================
 
         for name in ["FrontTemp", "BackTemp"]:
             if name in results:
@@ -237,7 +261,13 @@ def main():
                 inside.append(c)
 
                 cur.execute(
-                    "UPDATE currenttemp SET temperature=%s, temperatureF=%s, timestamp=%s WHERE Name=%s",
+                    """
+                    UPDATE currenttemp
+                    SET temperature=%s,
+                        temperatureF=%s,
+                        timestamp=%s
+                    WHERE Name=%s
+                    """,
                     (c, f, timestamp, name)
                 )
 
@@ -246,11 +276,19 @@ def main():
             avg_f = to_f(avg_c)
 
             cur.execute(
-                "UPDATE currenttemp SET temperature=%s, temperatureF=%s, timestamp=%s WHERE Name=%s",
+                """
+                UPDATE currenttemp
+                SET temperature=%s,
+                    temperatureF=%s,
+                    timestamp=%s
+                WHERE Name=%s
+                """,
                 (avg_c, avg_f, timestamp, "AverageInsideTemp")
             )
 
-        # ---------------- OTHER SENSORS ----------------
+        # =====================================================
+        # OTHER SENSORS
+        # =====================================================
 
         for name in ["PiTemp", "OutsideTemp", "WoodstoveTemp"]:
             if name in results:
@@ -258,12 +296,17 @@ def main():
                 f = to_f(c)
 
                 cur.execute(
-                    "UPDATE currenttemp SET temperature=%s, temperatureF=%s, timestamp=%s WHERE Name=%s",
+                    """
+                    UPDATE currenttemp
+                    SET temperature=%s,
+                        temperatureF=%s,
+                        timestamp=%s
+                    WHERE Name=%s
+                    """,
                     (c, f, timestamp, name)
                 )
 
         con.commit()
-
         logger.info("DB commit successful")
 
     except Exception as e:
