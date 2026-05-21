@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 #################################################################
-# Greenhouse Controller v4.3
+# Greenhouse Controller v4.3.1
 #
-# Direct drop-in replacement for the original controller.
-#
-# Preserves:
-# - Original heater/fan/window hysteresis logic
-# - Original schedule system
+# Direct drop-in replacement for the original controller with:
+# - Original DB-driven schedule system
 # - Original override system
-# - Original window opening/closing timings
-# - Original emergency shutdown window-closure behavior
+# - Original GPIO mappings
 # - Original status/status_log behavior
-#
-# Adds:
-# - Name-keyed sensor model
+# - Name-keyed sensor handling
 # - Sensor fallback policy
 # - In-memory short-cycle protection
 # - Window reversal lockout
-# - Dynamic hysteresis widening to reduce excessive cycling
+# - Dynamic hysteresis widening
+#
+# v4.3.1 fixes:
+# - 24s + 16s close sequence is now the standard everywhere
+# - Forced startup/shutdown window closure does NOT start cooldown timer
+# - Hardened DB datetime parsing
 #################################################################
 
 import sys
@@ -63,7 +62,7 @@ HEATER_GPIO = 19
 CIRC_FAN_GPIO = 6
 
 # Preserved from original controller.
-# These are intentionally driven LOW at startup and shutdown.
+# Even unused relay outputs are intentionally forced LOW for safety.
 UNUSED_GPIO_1 = 13
 UNUSED_GPIO_2 = 26
 UNUSED_GPIO_3 = 27
@@ -88,6 +87,7 @@ file_handler = logging.handlers.RotatingFileHandler(
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
+# Also log warnings/errors to stderr for journalctl/systemd visibility.
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.WARNING)
 stream_handler.setFormatter(formatter)
@@ -133,14 +133,11 @@ MAX_SENSOR_AGE_SECONDS = 60
 # SHORT-CYCLE / ANTI-CHATTER CONFIGURATION
 # ================================================================
 
-# These values protect relays, motors, and mechanical window actuators.
-# They do NOT replace hysteresis; they only prevent rapid repeated transitions.
-
 ACTUATOR_RULES = {
     "heater": {
         "min_on": 300,          # stay on at least 5 min before off
         "min_off": 120,         # stay off at least 2 min before on
-        "warn_cycles": 6,       # transitions/hour before widening hysteresis
+        "warn_cycles": 6,
         "severe_cycles": 12,
         "warning_bonus": Decimal("1.0"),
         "severe_bonus": Decimal("2.0"),
@@ -166,9 +163,8 @@ ACTUATOR_RULES = {
 WINDOW_REVERSAL_LOCKOUT_SECONDS = 60
 CYCLE_HISTORY_SECONDS = 3600
 
-
 # In-memory state is intentionally used here.
-# It is sufficient for this project and avoids extra SQL schema complexity.
+# It is adequate for this project and avoids adding SQL complexity.
 ACTUATOR_STATE = {
     "heater": {
         "state": False,
@@ -199,6 +195,56 @@ last_status = {
     "circfan": None,
     "window": None,
 }
+
+
+# ================================================================
+# DATETIME HELPERS
+# ================================================================
+
+def parse_db_datetime(value):
+    """
+    Return a timezone-aware UTC datetime from common PyMySQL/MySQL values.
+
+    MySQL/PyMySQL may return:
+    - datetime.datetime
+    - string like '2026-05-20 12:34:56'
+    - string like '2026-05-20T12:34:56+00:00'
+
+    The controller treats naive timestamps as UTC because checksensors writes
+    UTC timestamps and older MySQL DATETIME columns may not preserve timezone.
+    """
+
+    if value is None:
+        raise ValueError("Cannot parse None as datetime")
+
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+
+        # MySQL DATETIME normally uses a space between date and time.
+        # datetime.fromisoformat handles both ' ' and 'T' separators.
+        dt = datetime.fromisoformat(text)
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt.astimezone(timezone.utc)
+
+
+def coerce_time(value):
+    """
+    Handle MySQL TIME returned as datetime.time, timedelta, or string.
+    """
+
+    if hasattr(value, "hour"):
+        return value
+
+    if isinstance(value, timedelta):
+        seconds = int(value.total_seconds()) % 86400
+        return (datetime.min + timedelta(seconds=seconds)).time()
+
+    return datetime.strptime(str(value), "%H:%M:%S").time()
 
 
 # ================================================================
@@ -276,7 +322,11 @@ def update_window_status(state):
 
 @db_retry()
 def log_status_if_changed():
-    """Preserve original status_log behavior: log only when actuator state changes."""
+    """
+    Preserve original status_log behavior:
+    only insert rows when actuator state changes.
+    """
+
     global last_status
 
     con = None
@@ -328,7 +378,7 @@ def log_status_if_changed():
 # ACTUATOR PROTECTION HELPERS
 # ================================================================
 
-def _prune_cycle_history(actuator):
+def prune_cycle_history(actuator):
     """Keep only recent actuator transitions for cycle-rate detection."""
     now = time.monotonic()
     ACTUATOR_STATE[actuator]["changes"] = [
@@ -338,22 +388,29 @@ def _prune_cycle_history(actuator):
 
 
 def record_actuator_change(actuator, new_state):
-    """Record actuator transition for short-cycle and dynamic hysteresis logic."""
+    """
+    Record actuator transition for short-cycle and dynamic hysteresis logic.
+
+    Forced startup/shutdown window moves intentionally bypass this so they do
+    not poison the normal operating cooldown timer.
+    """
+
     now = time.monotonic()
 
     ACTUATOR_STATE[actuator]["state"] = new_state
     ACTUATOR_STATE[actuator]["last_change"] = now
     ACTUATOR_STATE[actuator]["changes"].append(now)
 
-    _prune_cycle_history(actuator)
+    prune_cycle_history(actuator)
 
 
 def actuator_can_change(actuator, desired_state):
     """
     Enforce minimum ON/OFF durations.
 
-    Emergency shutdown bypasses this function entirely.
+    Emergency shutdown and forced startup close bypass this function.
     """
+
     current_state = ACTUATOR_STATE[actuator]["state"]
 
     if current_state == desired_state:
@@ -392,7 +449,8 @@ def dynamic_hysteresis_range(actuator, base_range):
     - Only widen temporarily based on recent cycling.
     - This preserves schedule intent while protecting hardware.
     """
-    _prune_cycle_history(actuator)
+
+    prune_cycle_history(actuator)
 
     cycles = len(ACTUATOR_STATE[actuator]["changes"])
     rules = ACTUATOR_RULES[actuator]
@@ -428,8 +486,9 @@ def window_direction_allowed(direction):
     """
     Prevent rapid window direction reversal.
 
-    This protects timed motors, relays, and gear mechanisms.
+    This protects relays, motors, and gear mechanisms.
     """
+
     state = ACTUATOR_STATE["window"]
     last_direction = state["last_direction"]
 
@@ -457,7 +516,14 @@ def window_direction_allowed(direction):
 # ================================================================
 
 def setup_gpio():
-    """Initialize all GPIO outputs to safe LOW state and close windows at startup."""
+    """
+    Initialize all GPIO outputs to safe LOW state.
+
+    The forced startup close updates DB window state but does not record an
+    actuator cycle, so the controller can still open windows immediately after
+    startup if temperature requires it.
+    """
+
     outputs = [
         WINDOW_REVERSER_GPIO,
         WINDOW_GPIO,
@@ -478,22 +544,24 @@ def setup_gpio():
 
     logger.info("GPIO initialized to safe LOW state.")
 
-    # Original behavior preserved: close windows at startup.
-    close_windows(force=True)
+    # Original safety behavior retained: close windows at startup.
+    # record=False avoids starting the normal window cooldown timer.
+    close_windows(force=True, record=False)
 
 
 # ================================================================
 # WINDOW CONTROL
 # ================================================================
 
-def open_windows(force=False):
+def open_windows(force=False, record=True):
     """
     Open rear window then roof window.
 
-    Original timing preserved exactly:
+    Original timing preserved:
     - rear window: 35s
     - roof window: 14s
     """
+
     if not force:
         if not actuator_can_change("window", True):
             return
@@ -520,20 +588,26 @@ def open_windows(force=False):
     GPIO.output(ROOF_GPIO, GPIO.LOW)
     GPIO.output(ROOF_REVERSER_GPIO, GPIO.LOW)
 
+    ACTUATOR_STATE["window"]["state"] = True
     ACTUATOR_STATE["window"]["last_direction"] = "open"
-    record_actuator_change("window", True)
+
+    if record:
+        record_actuator_change("window", True)
 
     update_window_status(1)
 
 
-def close_windows(force=False):
+def close_windows(force=False, record=True):
     """
-    Close roof and rear windows.
+    Close windows using the standard close sequence.
 
-    Original timing preserved exactly:
-    - rear/window close drive: 24s
-    - roof close drive: 16s
+    v4.3.1 design decision:
+    - 24s + 16s is now the standard close sequence everywhere:
+      normal close, startup close, and emergency shutdown close.
+    - Forced startup/shutdown closes may update DB state without recording
+      an anti-cycle transition.
     """
+
     if not force:
         if not actuator_can_change("window", False):
             return
@@ -556,8 +630,11 @@ def close_windows(force=False):
     GPIO.output(WINDOW_GPIO, GPIO.LOW)
     GPIO.output(ROOF_GPIO, GPIO.LOW)
 
+    ACTUATOR_STATE["window"]["state"] = False
     ACTUATOR_STATE["window"]["last_direction"] = "close"
-    record_actuator_change("window", False)
+
+    if record:
+        record_actuator_change("window", False)
 
     update_window_status(0)
 
@@ -571,9 +648,11 @@ def shutdownnow():
     Emergency safe shutdown.
 
     Design decision:
-    - Short-cycle protection is bypassed here.
-    - Safety overrides hardware wear protection.
+    - Short-cycle protection is bypassed.
+    - Standard close timing is used: 24s + 16s.
+    - record=False avoids contaminating normal operating cycle history.
     """
+
     logger.error("EMERGENCY SHUTDOWN INITIATED")
 
     try:
@@ -586,7 +665,7 @@ def shutdownnow():
         GPIO.output(UNUSED_GPIO_2, GPIO.LOW)
         GPIO.output(UNUSED_GPIO_3, GPIO.LOW)
 
-        close_windows(force=True)
+        close_windows(force=True, record=False)
 
     except Exception:
         logger.exception("Error during emergency shutdown.")
@@ -604,6 +683,7 @@ def shutdownnow():
 @db_retry()
 def get_sensor_data():
     """Load currenttemp rows into a name-keyed dictionary."""
+
     con = None
 
     try:
@@ -618,10 +698,7 @@ def get_sensor_data():
 
         for name, temp, ts in rows:
             try:
-                sensor_time = ts
-
-                if sensor_time.tzinfo is None:
-                    sensor_time = sensor_time.replace(tzinfo=timezone.utc)
+                sensor_time = parse_db_datetime(ts)
 
                 sensors[name] = {
                     "temp": Decimal(str(temp)),
@@ -640,6 +717,7 @@ def get_sensor_data():
 
 def select_working_temperature(sensors):
     """Select best available fresh temperature source."""
+
     for sensor_name in SENSOR_PRIORITY:
         sensor = sensors.get(sensor_name)
 
@@ -660,21 +738,10 @@ def select_working_temperature(sensors):
 # SCHEDULE / OVERRIDES
 # ================================================================
 
-def _coerce_time(value):
-    """Handle MySQL TIME returned as datetime.time, timedelta, or string."""
-    if hasattr(value, "hour"):
-        return value
-
-    if isinstance(value, timedelta):
-        seconds = int(value.total_seconds()) % 86400
-        return (datetime.min + timedelta(seconds=seconds)).time()
-
-    return datetime.strptime(str(value), "%H:%M:%S").time()
-
-
 @db_retry()
 def get_schedule_settings():
     """Return the first active schedule row based on current time."""
+
     con = None
 
     try:
@@ -700,7 +767,7 @@ def get_schedule_settings():
         now_time = datetime.now().time()
 
         for row in rows:
-            end_time = _coerce_time(row[7])
+            end_time = coerce_time(row[7])
 
             if now_time < end_time:
                 return {
@@ -723,6 +790,7 @@ def get_schedule_settings():
 @db_retry()
 def get_override_settings():
     """Return active window/fan override flags if unexpired."""
+
     con = None
 
     try:
@@ -743,14 +811,8 @@ def get_override_settings():
 
         now = datetime.now(timezone.utc)
 
-        window_expire = row[1]
-        fan_expire = row[3]
-
-        if window_expire.tzinfo is None:
-            window_expire = window_expire.replace(tzinfo=timezone.utc)
-
-        if fan_expire.tzinfo is None:
-            fan_expire = fan_expire.replace(tzinfo=timezone.utc)
+        window_expire = parse_db_datetime(row[1])
+        fan_expire = parse_db_datetime(row[3])
 
         return {
             "window": int(row[0]) == 1 and now < window_expire,
@@ -765,6 +827,7 @@ def get_override_settings():
 @db_retry()
 def get_window_state():
     """Read DB-backed window state. This prevents repeated open/close cycles."""
+
     con = None
 
     try:
@@ -787,6 +850,7 @@ def get_window_state():
 
 def heater_control(current_temp, low_temp, low_range):
     """Heater hysteresis with short-cycle protection."""
+
     effective_range = dynamic_hysteresis_range("heater", low_range)
 
     half = effective_range / 2
@@ -810,6 +874,7 @@ def heater_control(current_temp, low_temp, low_range):
 
 def ventilation_control(current_temp, high_temp, high_range, override):
     """Ventilation fan hysteresis with override and short-cycle protection."""
+
     effective_range = dynamic_hysteresis_range("fan", high_range)
 
     half = effective_range / 2
@@ -848,6 +913,7 @@ def ventilation_control(current_temp, high_temp, high_range, override):
 
 def circulation_control(enabled):
     """Circulation fan follows schedule setting directly."""
+
     GPIO.output(CIRC_FAN_GPIO, GPIO.HIGH if enabled else GPIO.LOW)
 
     update_status(
@@ -858,6 +924,7 @@ def circulation_control(enabled):
 
 def window_control(current_temp, target_temp, temp_range, override):
     """Window hysteresis with cooldown and reversal lockout."""
+
     effective_range = dynamic_hysteresis_range("window", temp_range)
 
     half = effective_range / 2
@@ -887,7 +954,7 @@ def window_control(current_temp, target_temp, temp_range, override):
 # ================================================================
 
 def main():
-    logger.info("Greenhouse Controller v4.3 starting.")
+    logger.info("Greenhouse Controller v4.3.1 starting.")
 
     setup_gpio()
 
