@@ -30,6 +30,7 @@ import functools
 import logging
 import logging.handlers
 import configparser
+import signal
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 
@@ -319,6 +320,41 @@ def update_window_status(state):
         )
     except Exception:
         logger.exception("Failed updating window status.")
+
+
+@db_retry()
+def ensure_singleton_rows():
+    """Repair required one-row runtime tables if a row was deleted."""
+
+    con = None
+    try:
+        con = get_db_connection()
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO status
+                (id, heater, fan, circfan, window)
+                VALUES (1, 0, 0, 0, 0)
+                ON DUPLICATE KEY UPDATE id=VALUES(id)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO overrides
+                (id, windowoverride, windowexpire, fanoverride, fanexpire)
+                VALUES
+                (1, 0, '2010-01-01 00:00:00', 0, '2010-01-01 00:00:00')
+                ON DUPLICATE KEY UPDATE id=VALUES(id)
+                """
+            )
+        con.commit()
+    except Exception:
+        if con:
+            con.rollback()
+        raise
+    finally:
+        if con:
+            con.close()
 
 
 @db_retry()
@@ -687,6 +723,12 @@ def shutdownnow():
     sys.exit(1)
 
 
+def handle_shutdown_signal(signum, _frame):
+    """Route systemd/service stop signals through the safe shutdown path."""
+    logger.warning("Signal %s received; shutting down safely.", signum)
+    shutdownnow()
+
+
 # ================================================================
 # SENSOR LOADING
 # ================================================================
@@ -771,6 +813,7 @@ def get_schedule_settings():
                     circfan,
                     endtime
                 FROM settings
+                ORDER BY endtime
                 """
             )
             rows = cur.fetchall()
@@ -791,7 +834,23 @@ def get_schedule_settings():
                     "circfan": int(row[6]),
                 }
 
-        raise RuntimeError("No valid schedule found.")
+        if rows:
+            logger.warning(
+                "No schedule endtime is after current time %s; using final row.",
+                now_time,
+            )
+            row = rows[-1]
+            return {
+                "hightemp": Decimal(str(row[0])),
+                "lowtemp": Decimal(str(row[1])),
+                "hightemprange": Decimal(str(row[2])),
+                "lowtemprange": Decimal(str(row[3])),
+                "windowtemp": Decimal(str(row[4])),
+                "windowtemprange": Decimal(str(row[5])),
+                "circfan": int(row[6]),
+            }
+
+        raise RuntimeError("No schedule rows found.")
 
     finally:
         if con:
@@ -816,9 +875,17 @@ def get_override_settings():
                     fanoverride,
                     fanexpire
                 FROM overrides
+                WHERE id=1
                 """
             )
             row = cur.fetchone()
+
+        if not row:
+            logger.warning("No overrides row found; assuming no active overrides.")
+            return {
+                "window": False,
+                "fan": False,
+            }
 
         now = datetime.now(timezone.utc)
 
@@ -847,6 +914,10 @@ def get_window_state():
         with con.cursor() as cur:
             cur.execute("SELECT window FROM status WHERE id=1")
             row = cur.fetchone()
+
+        if not row:
+            logger.warning("No status row found; assuming windows closed.")
+            return 0
 
         return int(row[0])
 
@@ -988,11 +1059,14 @@ def window_control(current_temp, target_temp, temp_range, override):
 def main():
     logger.info("Greenhouse Controller v4.3.2 starting.")
 
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+
     setup_gpio()
 
     # Preserve original startup DB reset behavior, but do not let DB reset
     # failure prevent the controller from starting.
     try:
+        ensure_singleton_rows()
         update_status(
             """
             UPDATE status

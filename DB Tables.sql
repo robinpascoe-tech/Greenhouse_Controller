@@ -1,7 +1,39 @@
-CREATE TABLE sensor_health (
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+CREATE DATABASE IF NOT EXISTS `greenhouse` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE `greenhouse`;
+
+CREATE TABLE IF NOT EXISTS `status_log` (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    sensor_name VARCHAR(64),
-    timestamp DATETIME,
+    heater INT NOT NULL,
+    fan INT NOT NULL,
+    circfan INT NOT NULL,
+    window INT NOT NULL,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_status_log_timestamp (timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `sensor_diagnostics` (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    sensor_name VARCHAR(64) NOT NULL,
+    timestamp DATETIME NOT NULL,
+    raw_values TEXT,
+    median DECIMAL(6,2),
+    average DECIMAL(6,2),
+    stddev DECIMAL(6,3),
+    failure_count INT,
+    crc_failures INT NOT NULL DEFAULT 0,
+    notes VARCHAR(255),
+    INDEX idx_sensor_diagnostics_sensor_time (sensor_name, timestamp),
+    INDEX idx_sensor_diagnostics_timestamp (timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `sensor_health` (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    sensor_name VARCHAR(64) NOT NULL,
+    timestamp DATETIME NOT NULL,
 
     health_score INT,
     status VARCHAR(32),
@@ -13,18 +45,21 @@ CREATE TABLE sensor_health (
     drift_long DECIMAL(10,4),
 
     confidence DECIMAL(5,2),
-    notes TEXT
-);
+    notes TEXT,
+    INDEX idx_sensor_health_sensor_time (sensor_name, timestamp),
+    INDEX idx_sensor_health_timestamp (timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE sensor_alerts (
+CREATE TABLE IF NOT EXISTS `sensor_alerts` (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    sensor_name VARCHAR(64),
-    timestamp DATETIME,
-    alert_type VARCHAR(32),
-    message TEXT
-);
+    sensor_name VARCHAR(64) NOT NULL,
+    timestamp DATETIME NOT NULL,
+    alert_type VARCHAR(32) NOT NULL,
+    message TEXT,
+    INDEX idx_sensor_alerts_sensor_type_time (sensor_name, alert_type, timestamp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE sensor_state (
+CREATE TABLE IF NOT EXISTS `sensor_state` (
     sensor_name VARCHAR(64) PRIMARY KEY,
 
     last_status VARCHAR(32),
@@ -34,17 +69,17 @@ CREATE TABLE sensor_state (
     ema_variance DECIMAL(10,4),
 
     last_change_time DATETIME
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE sensor_profile (
+CREATE TABLE IF NOT EXISTS `sensor_profile` (
     sensor_name VARCHAR(64) PRIMARY KEY,
 
-    sensor_type VARCHAR(32),
+    sensor_type VARCHAR(32) NOT NULL DEFAULT 'indoor',
 
     -- expected behavior ranges
     expected_min FLOAT,
     expected_max FLOAT,
-    normal_variance FLOAT,
+    normal_variance FLOAT DEFAULT 1.0,
 
     -- sensitivity tuning
     drift_sensitivity FLOAT DEFAULT 1.0,
@@ -56,4 +91,144 @@ CREATE TABLE sensor_profile (
     learned_variance FLOAT,
 
     last_updated DATETIME
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `alerts`
+--
+
+CREATE TABLE IF NOT EXISTS `alerts` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `AlertName` text NOT NULL,
+  `Enabled` int(11) NOT NULL DEFAULT 0,
+  `Address1` text NOT NULL,
+  `Address2` text NOT NULL,
+  `Address1Enable` int(11) NOT NULL,
+  `Address2Enable` int(11) NOT NULL,
+  `Threshold` int(11) NOT NULL DEFAULT 0,
+  `lastalert` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `currenttemp`
+--
+
+CREATE TABLE IF NOT EXISTS `currenttemp` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `temperature` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `temperatureF` decimal(10,2) NOT NULL DEFAULT 32.00,
+  `timestamp` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `Name` varchar(64) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_currenttemp_name` (`Name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `currenttemp` (`id`, `temperature`, `temperatureF`, `timestamp`, `Name`) VALUES
+  (1, 0.00, 32.00, '2010-01-01 00:00:00', 'BackTemp'),
+  (2, 0.00, 32.00, '2010-01-01 00:00:00', 'FrontTemp'),
+  (3, 0.00, 32.00, '2010-01-01 00:00:00', 'OutsideTemp'),
+  (4, 0.00, 32.00, '2010-01-01 00:00:00', 'PiTemp'),
+  (5, 0.00, 32.00, '2010-01-01 00:00:00', 'AverageInsideTemp'),
+  (6, 0.00, 32.00, '2010-01-01 00:00:00', 'WoodstoveTemp')
+ON DUPLICATE KEY UPDATE
+  `Name` = VALUES(`Name`);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `overrides`
+--
+
+CREATE TABLE IF NOT EXISTS `overrides` (
+  `id` int(11) NOT NULL,
+  `windowoverride` tinyint(1) NOT NULL DEFAULT 0,
+  `windowexpire` datetime NOT NULL DEFAULT '2010-01-01 00:00:00',
+  `fanoverride` tinyint(1) NOT NULL DEFAULT 0,
+  `fanexpire` datetime NOT NULL DEFAULT '2010-01-01 00:00:00',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `overrides` (`id`, `windowoverride`, `windowexpire`, `fanoverride`, `fanexpire`) VALUES
+  (1, 0, '2010-01-01 00:00:00', 0, '2010-01-01 00:00:00')
+ON DUPLICATE KEY UPDATE
+  `id` = VALUES(`id`);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `settings`
+--
+
+CREATE TABLE IF NOT EXISTS `settings` (
+  `id` int(11) NOT NULL,
+  `hightemp` decimal(10,2) NOT NULL,
+  `lowtemp` decimal(10,2) NOT NULL,
+  `hightemprange` decimal(10,2) NOT NULL,
+  `lowtemprange` decimal(10,2) NOT NULL,
+  `windowtemp` decimal(10,2) NOT NULL,
+  `windowtemprange` decimal(10,2) NOT NULL,
+  `starttime` time NOT NULL,
+  `endtime` time NOT NULL,
+  `circfan` tinyint(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`),
+  INDEX `idx_settings_endtime` (`endtime`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `settings`
+  (`id`, `hightemp`, `lowtemp`, `hightemprange`, `lowtemprange`, `windowtemp`, `windowtemprange`, `starttime`, `endtime`, `circfan`)
+VALUES
+  (1, 40.00, 2.00, 4.00, 2.00, 39.00, 5.00, '00:00:00', '08:00:59', 1),
+  (2, 40.00, 2.00, 4.00, 2.00, 39.00, 6.00, '08:01:00', '16:00:59', 0),
+  (3, 40.00, 2.00, 4.00, 2.00, 39.00, 6.00, '16:01:00', '20:00:59', 1),
+  (4, 40.00, 2.00, 4.00, 2.00, 39.00, 5.00, '20:01:00', '23:59:59', 1)
+ON DUPLICATE KEY UPDATE
+  `id` = VALUES(`id`);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `status`
+--
+
+CREATE TABLE IF NOT EXISTS `status` (
+  `id` int(11) NOT NULL,
+  `heater` tinyint(1) NOT NULL DEFAULT 0,
+  `fan` tinyint(1) NOT NULL DEFAULT 0,
+  `circfan` tinyint(1) NOT NULL DEFAULT 0,
+  `window` tinyint(1) NOT NULL DEFAULT 0,
+  `timestamp` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `status` (`id`, `heater`, `fan`, `circfan`, `window`, `timestamp`) VALUES
+  (1, 0, 0, 0, 0, '2010-01-01 00:00:00')
+ON DUPLICATE KEY UPDATE
+  `id` = VALUES(`id`);
+
+-- ---------------------------------------------------------------------------
+-- Runtime SQL user for the Python scripts.
+--
+-- Change this password before running in production. This user intentionally
+-- has only data access permissions; use root/admin for schema migrations.
+-- ---------------------------------------------------------------------------
+
+CREATE USER IF NOT EXISTS 'greenhouse_app'@'localhost'
+  IDENTIFIED BY 'change_this_password';
+
+CREATE USER IF NOT EXISTS 'greenhouse_app'@'127.0.0.1'
+  IDENTIFIED BY 'change_this_password';
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON `greenhouse`.*
+  TO 'greenhouse_app'@'localhost';
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON `greenhouse`.*
+  TO 'greenhouse_app'@'127.0.0.1';
+
+FLUSH PRIVILEGES;
+
+COMMIT;

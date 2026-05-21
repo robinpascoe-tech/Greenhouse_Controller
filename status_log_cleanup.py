@@ -13,7 +13,7 @@ import configparser
 RETENTION_DAYS = 14
 
 # ── Database configuration ─────────────────────────────────────────────────────
-# Credentials are read from /etc/greenhouse/greenhouse.conf so they are never
+# Credentials are read from /home/pi/py3refactor/greenhouse.conf so they are never
 # stored in source code.  Example config file:
 #
 #   [database]
@@ -43,7 +43,14 @@ def cleanup_old_logs():
 
     print(f"Deleting records older than: {cutoff}")
 
-    con = mdb.connect(**_db_config)
+    con = mdb.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        connect_timeout=5,
+        autocommit=False,
+    )
     cur = con.cursor()
 
     try:

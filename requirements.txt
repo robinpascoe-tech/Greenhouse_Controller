@@ -1,0 +1,13 @@
+# Python package requirements for the greenhouse controller scripts.
+#
+# Install in a virtual environment with:
+#   python3 -m pip install -r requirements.txt
+#
+# Raspberry Pi GPIO support is intentionally not listed as a pip dependency.
+# On Raspberry Pi OS Trixie, install the RPi.GPIO-compatible system package:
+#   sudo apt install python3-rpi-lgpio
+#
+# MariaDB itself is also an OS package/service, not a pip package:
+#   sudo apt install mariadb-server
+
+PyMySQL>=1.1,<2

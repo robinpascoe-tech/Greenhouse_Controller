@@ -12,6 +12,7 @@
 
 import time
 import logging
+import configparser
 from logging.handlers import RotatingFileHandler
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -62,7 +63,7 @@ TWOPLACES = Decimal("0.01")
 
 
 def d(x):
-    return Decimal(x).quantize(TWOPLACES)
+    return Decimal(str(x)).quantize(TWOPLACES)
 
 
 def to_f(c):
@@ -90,6 +91,8 @@ def read_sensor(sensor_name, path):
             return {
                 "ok": False,
                 "reason": "max_attempts",
+                "avg": None,
+                "median": None,
                 "crc_failures": crc_failures,
                 "raw": readings
             }
@@ -102,6 +105,8 @@ def read_sensor(sensor_name, path):
             return {
                 "ok": False,
                 "reason": "file_error",
+                "avg": None,
+                "median": None,
                 "crc_failures": crc_failures,
                 "raw": readings
             }
@@ -109,7 +114,7 @@ def read_sensor(sensor_name, path):
         lines = text.split("\n")
 
         # CRC validation
-        if "YES" not in lines[0]:
+        if not lines or "YES" not in lines[0]:
             crc_failures += 1
             time.sleep(0.1)
             continue
@@ -117,7 +122,7 @@ def read_sensor(sensor_name, path):
         try:
             raw = lines[1].split(" ")[9]
             temp = float(raw[2:]) / 1000.0
-        except:
+        except (IndexError, ValueError):
             continue
 
         # reject invalid sensor spikes
@@ -160,13 +165,29 @@ def read_sensor(sensor_name, path):
 # DB CONNECTION
 # ============================================================
 
+config = configparser.ConfigParser()
+config.read("/home/pi/py3refactor/greenhouse.conf")
+
+try:
+    DB_HOST = config["database"]["host"]
+    DB_USER = config["database"]["user"]
+    DB_PASSWORD = config["database"]["password"]
+    DB_NAME = config["database"]["database"]
+except Exception:
+    DB_HOST = "localhost"
+    DB_USER = "root"
+    DB_PASSWORD = "change_this_password"
+    DB_NAME = "greenhouse"
+
+
 def db_connect():
     return pymysql.connect(
-        host="localhost",
-        user="root",
-        password="change_this_password",
-        database="greenhouse",
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
         cursorclass=pymysql.cursors.Cursor,
+        connect_timeout=5,
         autocommit=False
     )
 
@@ -192,7 +213,8 @@ def write_sensor_diagnostics(cur, timestamp, name, result):
             "raw": []
         }
 
-    raw = ",".join(str(x) for x in result["raw"]) if result["raw"] else "FAIL"
+    raw_values = result.get("raw") or []
+    raw = ",".join(str(x) for x in raw_values) if raw_values else "FAIL"
 
     cur.execute(
         """
@@ -204,8 +226,8 @@ def write_sensor_diagnostics(cur, timestamp, name, result):
             name,
             timestamp,
             raw,
-            d(result["median"]) if result["median"] is not None else None,
-            d(result["avg"]) if result["avg"] is not None else None,
+            d(result.get("median")) if result.get("median") is not None else None,
+            d(result.get("avg")) if result.get("avg") is not None else None,
             result.get("crc_failures", 0),
             "ok" if result.get("ok") else "FAILED"
         )

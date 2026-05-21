@@ -1,0 +1,8 @@
+# Install with
+# sudo apt update
+# xargs -a apt-packages.txt sudo apt install -y
+
+python3
+python3-pymysql
+python3-rpi-lgpio
+mariadb-server
