@@ -1,46 +1,23 @@
 #!/usr/bin/env python3
 #################################################################
-# Greenhouse Controller v4.2
-# Production Hardened / Direct Drop-In Replacement
+# Greenhouse Controller v4.3
 #
-# Created by: Robin Pascoe + iterative engineering refactor
+# Direct drop-in replacement for the original controller.
 #
-# Version: 2026-05-20 v4.2
+# Preserves:
+# - Original heater/fan/window hysteresis logic
+# - Original schedule system
+# - Original override system
+# - Original window opening/closing timings
+# - Original emergency shutdown window-closure behavior
+# - Original status/status_log behavior
 #
-# PURPOSE
-# -------
-# Greenhouse environmental controller for Raspberry Pi.
-#
-# Controls:
-#   - Heater
-#   - Ventilation Fans
-#   - Circulation Fan
-#   - Rear Window
-#   - Roof Window
-#
-# Uses:
-#   - MySQL/MariaDB backend
-#   - GPIO relay outputs
-#   - DS18B20 sensor data from checksensors
-#
-# DESIGN GOALS
-# ------------
-# - Preserve original greenhouse behavior EXACTLY where safety critical
-# - Preserve original window timings and sequencing
-# - Preserve original hysteresis control logic
-# - Preserve original override system
-# - Preserve original schedule system
-#
-# IMPROVEMENTS
-# ------------
-# - Python 3 modernization
-# - Robust logging
-# - DB retry logic
-# - Sensor stale detection
+# Adds:
 # - Name-keyed sensor model
-# - Safer shutdown handling
-# - Better diagnostics
-#
+# - Sensor fallback policy
+# - In-memory short-cycle protection
+# - Window reversal lockout
+# - Dynamic hysteresis widening to reduce excessive cycling
 #################################################################
 
 import sys
@@ -50,9 +27,10 @@ import logging
 import logging.handlers
 import configparser
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import pymysql as mdb
+
 
 # ================================================================
 # GPIO IMPORT
@@ -60,13 +38,10 @@ import pymysql as mdb
 
 try:
     from RPi import GPIO
-
     GPIO.setmode(GPIO.BCM)
     GPIO.setwarnings(False)
-
 except ImportError:
     from unittest import mock
-
     GPIO = mock.MagicMock()
     print("WARNING: RPi.GPIO not available. Running in MOCK mode.")
 
@@ -87,8 +62,8 @@ AUX_VENT_FAN_GPIO = 11
 HEATER_GPIO = 19
 CIRC_FAN_GPIO = 6
 
-# Original unused outputs preserved intentionally.
-# Even unused relays should always be forced LOW for safety.
+# Preserved from original controller.
+# These are intentionally driven LOW at startup and shutdown.
 UNUSED_GPIO_1 = 13
 UNUSED_GPIO_2 = 26
 UNUSED_GPIO_3 = 27
@@ -103,20 +78,16 @@ LOG_FILENAME = "/home/pi/py3refactor/thermostat.log"
 logger = logging.getLogger("GreenhouseController")
 logger.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter(
-    "%(asctime)s %(levelname)-8s %(message)s"
-)
+formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
 
 file_handler = logging.handlers.RotatingFileHandler(
     LOG_FILENAME,
     maxBytes=5 * 1024 * 1024,
-    backupCount=5
+    backupCount=5,
 )
-
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-# Also log warnings/errors to stderr for systemd/journalctl visibility.
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.WARNING)
 stream_handler.setFormatter(formatter)
@@ -135,15 +106,10 @@ try:
     DB_USER = config["database"]["user"]
     DB_PASSWORD = config["database"]["password"]
     DB_NAME = config["database"]["database"]
-
 except Exception:
-
-    # Preserve original hardcoded fallback behavior.
     logger.warning(
-        "Could not load greenhouse.conf. "
-        "Using hardcoded DB fallback."
+        "Could not load greenhouse.conf. Using hardcoded DB fallback."
     )
-
     DB_HOST = "localhost"
     DB_USER = "root"
     DB_PASSWORD = "change_this_password"
@@ -151,65 +117,113 @@ except Exception:
 
 
 # ================================================================
-# SENSOR CONFIGURATION
+# SENSOR POLICY
 # ================================================================
-
-# Name-keyed sensor model.
-# This removes dangerous dependence on SQL row ordering.
 
 SENSOR_PRIORITY = [
     "AverageInsideTemp",
     "FrontTemp",
-    "BackTemp"
+    "BackTemp",
 ]
 
 MAX_SENSOR_AGE_SECONDS = 60
 
 
 # ================================================================
-# STATUS CACHE
+# SHORT-CYCLE / ANTI-CHATTER CONFIGURATION
 # ================================================================
 
-# Used for status_log change detection.
+# These values protect relays, motors, and mechanical window actuators.
+# They do NOT replace hysteresis; they only prevent rapid repeated transitions.
+
+ACTUATOR_RULES = {
+    "heater": {
+        "min_on": 300,          # stay on at least 5 min before off
+        "min_off": 120,         # stay off at least 2 min before on
+        "warn_cycles": 6,       # transitions/hour before widening hysteresis
+        "severe_cycles": 12,
+        "warning_bonus": Decimal("1.0"),
+        "severe_bonus": Decimal("2.0"),
+    },
+    "fan": {
+        "min_on": 120,          # stay on at least 2 min
+        "min_off": 60,          # stay off at least 1 min
+        "warn_cycles": 10,
+        "severe_cycles": 20,
+        "warning_bonus": Decimal("1.0"),
+        "severe_bonus": Decimal("2.0"),
+    },
+    "window": {
+        "min_on": 300,          # minimum time between movements
+        "min_off": 300,
+        "warn_cycles": 4,
+        "severe_cycles": 8,
+        "warning_bonus": Decimal("1.0"),
+        "severe_bonus": Decimal("2.0"),
+    },
+}
+
+WINDOW_REVERSAL_LOCKOUT_SECONDS = 60
+CYCLE_HISTORY_SECONDS = 3600
+
+
+# In-memory state is intentionally used here.
+# It is sufficient for this project and avoids extra SQL schema complexity.
+ACTUATOR_STATE = {
+    "heater": {
+        "state": False,
+        "last_change": 0.0,
+        "changes": [],
+    },
+    "fan": {
+        "state": False,
+        "last_change": 0.0,
+        "changes": [],
+    },
+    "window": {
+        "state": False,          # False=closed, True=open
+        "last_change": 0.0,
+        "last_direction": None,  # "open" or "close"
+        "changes": [],
+    },
+}
+
+
+# ================================================================
+# STATUS CACHE
+# ================================================================
 
 last_status = {
     "heater": None,
     "fan": None,
     "circfan": None,
-    "window": None
+    "window": None,
 }
 
 
 # ================================================================
-# DATABASE RETRY DECORATOR
+# DATABASE HELPERS
 # ================================================================
 
 def db_retry(max_retries=5, delay=5):
-
+    """Retry database operations before allowing the controller to fail safe."""
     def decorator(func):
-
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-
             last_exception = None
 
             for attempt in range(1, max_retries + 1):
-
                 try:
                     return func(*args, **kwargs)
-
                 except mdb.Error as e:
-
                     last_exception = e
-
                     logger.warning(
                         "DB error in %s attempt %d/%d: %s",
                         func.__name__,
                         attempt,
                         max_retries,
-                        e
+                        e,
                     )
-
                     time.sleep(delay)
 
             raise last_exception
@@ -219,232 +233,69 @@ def db_retry(max_retries=5, delay=5):
     return decorator
 
 
-# ================================================================
-# DATABASE CONNECTION
-# ================================================================
-
 @db_retry()
 def get_db_connection():
-
     return mdb.connect(
         host=DB_HOST,
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
         connect_timeout=5,
-        autocommit=False
+        autocommit=False,
     )
 
 
-# ================================================================
-# GPIO INITIALIZATION
-# ================================================================
-
-def setup_gpio():
-    """
-    Initialize ALL outputs to LOW safe state.
-
-    Original controller intentionally forced all GPIO outputs LOW
-    during startup to prevent accidental relay activation.
-    """
-
-    outputs = [
-        WINDOW_REVERSER_GPIO,
-        WINDOW_GPIO,
-        ROOF_REVERSER_GPIO,
-        ROOF_GPIO,
-        VENT_FAN_GPIO,
-        AUX_VENT_FAN_GPIO,
-        HEATER_GPIO,
-        CIRC_FAN_GPIO,
-        UNUSED_GPIO_1,
-        UNUSED_GPIO_2,
-        UNUSED_GPIO_3
-    ]
-
-    for pin in outputs:
-        GPIO.setup(pin, GPIO.OUT)
-        GPIO.output(pin, GPIO.LOW)
-
-    logger.info("GPIO initialized to safe LOW state.")
-
-    # Preserve original startup behavior:
-    # ALWAYS close windows at startup as safety precaution.
-
-    close_windows()
-
-
-# ================================================================
-# WINDOW CONTROL
-# ================================================================
-
-def open_windows():
-    """
-    Open rear window then roof window.
-
-    Timing values intentionally preserved EXACTLY from original
-    controller due to motor/mechanical requirements.
-    """
-
-    logger.info("Opening windows.")
-
-    # Rear window first.
-    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.HIGH)
-    time.sleep(0.5)
-
-    GPIO.output(WINDOW_GPIO, GPIO.HIGH)
-    time.sleep(35)
-
-    GPIO.output(WINDOW_GPIO, GPIO.LOW)
-    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.LOW)
-
-    # Roof window.
-    GPIO.output(ROOF_REVERSER_GPIO, GPIO.HIGH)
-    time.sleep(0.5)
-
-    GPIO.output(ROOF_GPIO, GPIO.HIGH)
-    time.sleep(14)
-
-    GPIO.output(ROOF_GPIO, GPIO.LOW)
-    GPIO.output(ROOF_REVERSER_GPIO, GPIO.LOW)
-
-    update_window_status(1)
-
-
-def close_windows():
-    """
-    Close roof and rear windows.
-
-    Original sequencing preserved intentionally.
-    """
-
-    logger.info("Closing windows.")
-
-    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.LOW)
-    GPIO.output(ROOF_REVERSER_GPIO, GPIO.LOW)
-
-    time.sleep(0.5)
-
-    GPIO.output(WINDOW_GPIO, GPIO.HIGH)
-    time.sleep(24)
-
-    GPIO.output(ROOF_GPIO, GPIO.HIGH)
-    time.sleep(16)
-
-    GPIO.output(WINDOW_GPIO, GPIO.LOW)
-    GPIO.output(ROOF_GPIO, GPIO.LOW)
-
-    update_window_status(0)
-
-
-# ================================================================
-# EMERGENCY SHUTDOWN
-# ================================================================
-
-def shutdownnow():
-    """
-    Emergency safe shutdown.
-
-    Original safety behavior preserved:
-    - all outputs LOW
-    - windows closed
-    - GPIO cleanup
-    """
-
-    logger.error("EMERGENCY SHUTDOWN INITIATED")
-
-    try:
-
-        GPIO.output(VENT_FAN_GPIO, GPIO.LOW)
-        GPIO.output(AUX_VENT_FAN_GPIO, GPIO.LOW)
-
-        GPIO.output(CIRC_FAN_GPIO, GPIO.LOW)
-
-        GPIO.output(HEATER_GPIO, GPIO.LOW)
-
-        GPIO.output(UNUSED_GPIO_1, GPIO.LOW)
-        GPIO.output(UNUSED_GPIO_2, GPIO.LOW)
-        GPIO.output(UNUSED_GPIO_3, GPIO.LOW)
-
-        close_windows()
-
-    except Exception:
-        logger.exception("Error during emergency shutdown.")
-
-    finally:
-
-        GPIO.cleanup()
-
-    sys.exit(1)
-
-
-# ================================================================
-# STATUS DATABASE HELPERS
-# ================================================================
-
 @db_retry()
 def update_status(query, values):
-
+    """Update the status table and commit immediately."""
     con = None
-
     try:
-
         con = get_db_connection()
-
         with con.cursor() as cur:
             cur.execute(query, values)
-
         con.commit()
-
+    except Exception:
+        if con:
+            con.rollback()
+        raise
     finally:
-
         if con:
             con.close()
 
 
 def update_window_status(state):
-
+    """Persist window state to the status table."""
     try:
-
         update_status(
             "UPDATE status SET window=%s WHERE id=1",
-            (state,)
+            (state,),
         )
-
     except Exception:
         logger.exception("Failed updating window status.")
 
 
 @db_retry()
 def log_status_if_changed():
-    """
-    Preserve original status_log behavior.
-
-    Only insert rows when actuator states change.
-    """
-
+    """Preserve original status_log behavior: log only when actuator state changes."""
     global last_status
 
     con = None
-
     try:
-
         con = get_db_connection()
-
         with con.cursor() as cur:
-
             cur.execute(
-                "SELECT heater, fan, circfan, window "
-                "FROM status WHERE id=1"
+                "SELECT heater, fan, circfan, window FROM status WHERE id=1"
             )
-
             row = cur.fetchone()
+
+            if not row:
+                return
 
             current = {
                 "heater": int(row[0]),
                 "fan": int(row[1]),
                 "circfan": int(row[2]),
-                "window": int(row[3])
+                "window": int(row[3]),
             }
 
             if current == last_status:
@@ -462,16 +313,288 @@ def log_status_if_changed():
                     current["heater"],
                     current["fan"],
                     current["circfan"],
-                    current["window"]
-                )
+                    current["window"],
+                ),
             )
 
         con.commit()
 
     finally:
-
         if con:
             con.close()
+
+
+# ================================================================
+# ACTUATOR PROTECTION HELPERS
+# ================================================================
+
+def _prune_cycle_history(actuator):
+    """Keep only recent actuator transitions for cycle-rate detection."""
+    now = time.monotonic()
+    ACTUATOR_STATE[actuator]["changes"] = [
+        t for t in ACTUATOR_STATE[actuator]["changes"]
+        if now - t <= CYCLE_HISTORY_SECONDS
+    ]
+
+
+def record_actuator_change(actuator, new_state):
+    """Record actuator transition for short-cycle and dynamic hysteresis logic."""
+    now = time.monotonic()
+
+    ACTUATOR_STATE[actuator]["state"] = new_state
+    ACTUATOR_STATE[actuator]["last_change"] = now
+    ACTUATOR_STATE[actuator]["changes"].append(now)
+
+    _prune_cycle_history(actuator)
+
+
+def actuator_can_change(actuator, desired_state):
+    """
+    Enforce minimum ON/OFF durations.
+
+    Emergency shutdown bypasses this function entirely.
+    """
+    current_state = ACTUATOR_STATE[actuator]["state"]
+
+    if current_state == desired_state:
+        return False
+
+    rules = ACTUATOR_RULES[actuator]
+    elapsed = time.monotonic() - ACTUATOR_STATE[actuator]["last_change"]
+
+    if current_state is True and desired_state is False:
+        if elapsed < rules["min_on"]:
+            logger.info(
+                "%s OFF blocked by min_on protection (%.0fs remaining)",
+                actuator,
+                rules["min_on"] - elapsed,
+            )
+            return False
+
+    if current_state is False and desired_state is True:
+        if elapsed < rules["min_off"]:
+            logger.info(
+                "%s ON blocked by min_off protection (%.0fs remaining)",
+                actuator,
+                rules["min_off"] - elapsed,
+            )
+            return False
+
+    return True
+
+
+def dynamic_hysteresis_range(actuator, base_range):
+    """
+    Dynamically widen hysteresis when excessive cycling is detected.
+
+    Design decision:
+    - Never shrink below configured DB range.
+    - Only widen temporarily based on recent cycling.
+    - This preserves schedule intent while protecting hardware.
+    """
+    _prune_cycle_history(actuator)
+
+    cycles = len(ACTUATOR_STATE[actuator]["changes"])
+    rules = ACTUATOR_RULES[actuator]
+
+    base_range = Decimal(base_range)
+
+    if cycles >= rules["severe_cycles"]:
+        effective = base_range + rules["severe_bonus"]
+        logger.warning(
+            "%s severe cycling detected (%d/hr). "
+            "Using widened hysteresis range %s.",
+            actuator,
+            cycles,
+            effective,
+        )
+        return effective
+
+    if cycles >= rules["warn_cycles"]:
+        effective = base_range + rules["warning_bonus"]
+        logger.warning(
+            "%s elevated cycling detected (%d/hr). "
+            "Using widened hysteresis range %s.",
+            actuator,
+            cycles,
+            effective,
+        )
+        return effective
+
+    return base_range
+
+
+def window_direction_allowed(direction):
+    """
+    Prevent rapid window direction reversal.
+
+    This protects timed motors, relays, and gear mechanisms.
+    """
+    state = ACTUATOR_STATE["window"]
+    last_direction = state["last_direction"]
+
+    if last_direction is None:
+        return True
+
+    if last_direction == direction:
+        return True
+
+    elapsed = time.monotonic() - state["last_change"]
+
+    if elapsed < WINDOW_REVERSAL_LOCKOUT_SECONDS:
+        logger.warning(
+            "Window %s blocked by reversal lockout (%.0fs remaining).",
+            direction,
+            WINDOW_REVERSAL_LOCKOUT_SECONDS - elapsed,
+        )
+        return False
+
+    return True
+
+
+# ================================================================
+# GPIO INITIALIZATION
+# ================================================================
+
+def setup_gpio():
+    """Initialize all GPIO outputs to safe LOW state and close windows at startup."""
+    outputs = [
+        WINDOW_REVERSER_GPIO,
+        WINDOW_GPIO,
+        ROOF_REVERSER_GPIO,
+        ROOF_GPIO,
+        VENT_FAN_GPIO,
+        AUX_VENT_FAN_GPIO,
+        HEATER_GPIO,
+        CIRC_FAN_GPIO,
+        UNUSED_GPIO_1,
+        UNUSED_GPIO_2,
+        UNUSED_GPIO_3,
+    ]
+
+    for pin in outputs:
+        GPIO.setup(pin, GPIO.OUT)
+        GPIO.output(pin, GPIO.LOW)
+
+    logger.info("GPIO initialized to safe LOW state.")
+
+    # Original behavior preserved: close windows at startup.
+    close_windows(force=True)
+
+
+# ================================================================
+# WINDOW CONTROL
+# ================================================================
+
+def open_windows(force=False):
+    """
+    Open rear window then roof window.
+
+    Original timing preserved exactly:
+    - rear window: 35s
+    - roof window: 14s
+    """
+    if not force:
+        if not actuator_can_change("window", True):
+            return
+        if not window_direction_allowed("open"):
+            return
+
+    logger.info("Opening windows.")
+
+    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.HIGH)
+    time.sleep(0.5)
+
+    GPIO.output(WINDOW_GPIO, GPIO.HIGH)
+    time.sleep(35)
+
+    GPIO.output(WINDOW_GPIO, GPIO.LOW)
+    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.LOW)
+
+    GPIO.output(ROOF_REVERSER_GPIO, GPIO.HIGH)
+    time.sleep(0.5)
+
+    GPIO.output(ROOF_GPIO, GPIO.HIGH)
+    time.sleep(14)
+
+    GPIO.output(ROOF_GPIO, GPIO.LOW)
+    GPIO.output(ROOF_REVERSER_GPIO, GPIO.LOW)
+
+    ACTUATOR_STATE["window"]["last_direction"] = "open"
+    record_actuator_change("window", True)
+
+    update_window_status(1)
+
+
+def close_windows(force=False):
+    """
+    Close roof and rear windows.
+
+    Original timing preserved exactly:
+    - rear/window close drive: 24s
+    - roof close drive: 16s
+    """
+    if not force:
+        if not actuator_can_change("window", False):
+            return
+        if not window_direction_allowed("close"):
+            return
+
+    logger.info("Closing windows.")
+
+    GPIO.output(WINDOW_REVERSER_GPIO, GPIO.LOW)
+    GPIO.output(ROOF_REVERSER_GPIO, GPIO.LOW)
+
+    time.sleep(0.5)
+
+    GPIO.output(WINDOW_GPIO, GPIO.HIGH)
+    time.sleep(24)
+
+    GPIO.output(ROOF_GPIO, GPIO.HIGH)
+    time.sleep(16)
+
+    GPIO.output(WINDOW_GPIO, GPIO.LOW)
+    GPIO.output(ROOF_GPIO, GPIO.LOW)
+
+    ACTUATOR_STATE["window"]["last_direction"] = "close"
+    record_actuator_change("window", False)
+
+    update_window_status(0)
+
+
+# ================================================================
+# EMERGENCY SHUTDOWN
+# ================================================================
+
+def shutdownnow():
+    """
+    Emergency safe shutdown.
+
+    Design decision:
+    - Short-cycle protection is bypassed here.
+    - Safety overrides hardware wear protection.
+    """
+    logger.error("EMERGENCY SHUTDOWN INITIATED")
+
+    try:
+        GPIO.output(VENT_FAN_GPIO, GPIO.LOW)
+        GPIO.output(AUX_VENT_FAN_GPIO, GPIO.LOW)
+        GPIO.output(CIRC_FAN_GPIO, GPIO.LOW)
+        GPIO.output(HEATER_GPIO, GPIO.LOW)
+
+        GPIO.output(UNUSED_GPIO_1, GPIO.LOW)
+        GPIO.output(UNUSED_GPIO_2, GPIO.LOW)
+        GPIO.output(UNUSED_GPIO_3, GPIO.LOW)
+
+        close_windows(force=True)
+
+    except Exception:
+        logger.exception("Error during emergency shutdown.")
+
+    finally:
+        GPIO.cleanup()
+
+    sys.exit(1)
 
 
 # ================================================================
@@ -480,111 +603,84 @@ def log_status_if_changed():
 
 @db_retry()
 def get_sensor_data():
-    """
-    Load sensors into name-keyed structure.
-
-    Avoids dangerous SQL row ordering assumptions.
-    """
-
+    """Load currenttemp rows into a name-keyed dictionary."""
     con = None
 
     try:
-
         con = get_db_connection()
 
         with con.cursor() as cur:
-
-            cur.execute(
-                "SELECT Name, temperature, timestamp "
-                "FROM currenttemp"
-            )
-
+            cur.execute("SELECT Name, temperature, timestamp FROM currenttemp")
             rows = cur.fetchall()
 
         sensors = {}
-
         now = datetime.now(timezone.utc)
 
-        for row in rows:
+        for name, temp, ts in rows:
+            try:
+                sensor_time = ts
 
-            name = row[0]
-            temp = Decimal(str(row[1]))
+                if sensor_time.tzinfo is None:
+                    sensor_time = sensor_time.replace(tzinfo=timezone.utc)
 
-            timestamp = row[2]
+                sensors[name] = {
+                    "temp": Decimal(str(temp)),
+                    "age": (now - sensor_time).total_seconds(),
+                }
 
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(
-                    tzinfo=timezone.utc
-                )
-
-            age = (now - timestamp).total_seconds()
-
-            sensors[name] = {
-                "temp": temp,
-                "age": age
-            }
+            except Exception:
+                logger.exception("Bad sensor row for %s", name)
 
         return sensors
 
     finally:
-
         if con:
             con.close()
 
 
-# ================================================================
-# SENSOR POLICY ENGINE
-# ================================================================
-
 def select_working_temperature(sensors):
-    """
-    Choose best available temperature source.
-
-    Priority:
-        1. AverageInsideTemp
-        2. FrontTemp
-        3. BackTemp
-
-    Only accept fresh readings.
-    """
-
+    """Select best available fresh temperature source."""
     for sensor_name in SENSOR_PRIORITY:
+        sensor = sensors.get(sensor_name)
 
-        if sensor_name not in sensors:
+        if not sensor:
             continue
 
-        sensor = sensors[sensor_name]
-
         if sensor["age"] <= MAX_SENSOR_AGE_SECONDS:
-
             if sensor_name != "AverageInsideTemp":
-                logger.warning(
-                    "Using fallback sensor: %s",
-                    sensor_name
-                )
+                logger.warning("Using fallback sensor: %s", sensor_name)
 
             return sensor["temp"]
 
     logger.error("No valid fresh sensors available.")
-
     shutdownnow()
 
 
 # ================================================================
-# SCHEDULE SETTINGS
+# SCHEDULE / OVERRIDES
 # ================================================================
+
+def _coerce_time(value):
+    """Handle MySQL TIME returned as datetime.time, timedelta, or string."""
+    if hasattr(value, "hour"):
+        return value
+
+    if isinstance(value, timedelta):
+        seconds = int(value.total_seconds()) % 86400
+        return (datetime.min + timedelta(seconds=seconds)).time()
+
+    return datetime.strptime(str(value), "%H:%M:%S").time()
+
 
 @db_retry()
 def get_schedule_settings():
-
+    """Return the first active schedule row based on current time."""
     con = None
 
     try:
-
         con = get_db_connection()
 
         with con.cursor() as cur:
-
             cur.execute(
                 """
                 SELECT
@@ -599,17 +695,14 @@ def get_schedule_settings():
                 FROM settings
                 """
             )
-
             rows = cur.fetchall()
 
         now_time = datetime.now().time()
 
         for row in rows:
-
-            end_time = row[7]
+            end_time = _coerce_time(row[7])
 
             if now_time < end_time:
-
                 return {
                     "hightemp": Decimal(str(row[0])),
                     "lowtemp": Decimal(str(row[1])),
@@ -617,32 +710,25 @@ def get_schedule_settings():
                     "lowtemprange": Decimal(str(row[3])),
                     "windowtemp": Decimal(str(row[4])),
                     "windowtemprange": Decimal(str(row[5])),
-                    "circfan": int(row[6])
+                    "circfan": int(row[6]),
                 }
 
         raise RuntimeError("No valid schedule found.")
 
     finally:
-
         if con:
             con.close()
 
 
-# ================================================================
-# OVERRIDES
-# ================================================================
-
 @db_retry()
 def get_override_settings():
-
+    """Return active window/fan override flags if unexpired."""
     con = None
 
     try:
-
         con = get_db_connection()
 
         with con.cursor() as cur:
-
             cur.execute(
                 """
                 SELECT
@@ -653,57 +739,44 @@ def get_override_settings():
                 FROM overrides
                 """
             )
-
             row = cur.fetchone()
 
         now = datetime.now(timezone.utc)
 
-        window_override = (
-            int(row[0]) == 1 and
-            now < row[1].replace(tzinfo=timezone.utc)
-        )
+        window_expire = row[1]
+        fan_expire = row[3]
 
-        fan_override = (
-            int(row[2]) == 1 and
-            now < row[3].replace(tzinfo=timezone.utc)
-        )
+        if window_expire.tzinfo is None:
+            window_expire = window_expire.replace(tzinfo=timezone.utc)
+
+        if fan_expire.tzinfo is None:
+            fan_expire = fan_expire.replace(tzinfo=timezone.utc)
 
         return {
-            "window": window_override,
-            "fan": fan_override
+            "window": int(row[0]) == 1 and now < window_expire,
+            "fan": int(row[2]) == 1 and now < fan_expire,
         }
 
     finally:
-
         if con:
             con.close()
 
 
-# ================================================================
-# WINDOW STATE
-# ================================================================
-
 @db_retry()
 def get_window_state():
-
+    """Read DB-backed window state. This prevents repeated open/close cycles."""
     con = None
 
     try:
-
         con = get_db_connection()
 
         with con.cursor() as cur:
-
-            cur.execute(
-                "SELECT window FROM status WHERE id=1"
-            )
-
+            cur.execute("SELECT window FROM status WHERE id=1")
             row = cur.fetchone()
 
-            return int(row[0])
+        return int(row[0])
 
     finally:
-
         if con:
             con.close()
 
@@ -713,103 +786,81 @@ def get_window_state():
 # ================================================================
 
 def heater_control(current_temp, low_temp, low_range):
+    """Heater hysteresis with short-cycle protection."""
+    effective_range = dynamic_hysteresis_range("heater", low_range)
 
-    half = low_range / 2
-
+    half = effective_range / 2
     lower = low_temp - half
     upper = low_temp + half
 
     if current_temp <= lower:
-
-        GPIO.output(HEATER_GPIO, GPIO.HIGH)
-
-        update_status(
-            "UPDATE status SET heater=%s WHERE id=1",
-            (1,)
-        )
-
-        logger.info("Heater ON")
+        if actuator_can_change("heater", True):
+            GPIO.output(HEATER_GPIO, GPIO.HIGH)
+            record_actuator_change("heater", True)
+            update_status("UPDATE status SET heater=%s WHERE id=1", (1,))
+            logger.info("Heater ON")
 
     elif current_temp >= upper:
-
-        GPIO.output(HEATER_GPIO, GPIO.LOW)
-
-        update_status(
-            "UPDATE status SET heater=%s WHERE id=1",
-            (0,)
-        )
-
-        logger.info("Heater OFF")
+        if actuator_can_change("heater", False):
+            GPIO.output(HEATER_GPIO, GPIO.LOW)
+            record_actuator_change("heater", False)
+            update_status("UPDATE status SET heater=%s WHERE id=1", (0,))
+            logger.info("Heater OFF")
 
 
-def ventilation_control(
-    current_temp,
-    high_temp,
-    high_range,
-    override
-):
+def ventilation_control(current_temp, high_temp, high_range, override):
+    """Ventilation fan hysteresis with override and short-cycle protection."""
+    effective_range = dynamic_hysteresis_range("fan", high_range)
 
-    half = high_range / 2
-
+    half = effective_range / 2
     lower = high_temp - half
     upper = high_temp + half
 
     if override:
         fan_on = True
-
     elif current_temp >= upper:
         fan_on = True
-
     elif current_temp <= lower:
         fan_on = False
-
     else:
         return
 
-    if fan_on:
+    if not actuator_can_change("fan", fan_on):
+        return
 
+    if fan_on:
         GPIO.output(VENT_FAN_GPIO, GPIO.HIGH)
         time.sleep(1)
-
         GPIO.output(AUX_VENT_FAN_GPIO, GPIO.HIGH)
-
         logger.info("Ventilation fans ON")
-
     else:
-
         GPIO.output(VENT_FAN_GPIO, GPIO.LOW)
         GPIO.output(AUX_VENT_FAN_GPIO, GPIO.LOW)
-
         logger.info("Ventilation fans OFF")
+
+    record_actuator_change("fan", fan_on)
 
     update_status(
         "UPDATE status SET fan=%s WHERE id=1",
-        (1 if fan_on else 0,)
+        (1 if fan_on else 0,),
     )
 
 
 def circulation_control(enabled):
-
-    GPIO.output(
-        CIRC_FAN_GPIO,
-        GPIO.HIGH if enabled else GPIO.LOW
-    )
+    """Circulation fan follows schedule setting directly."""
+    GPIO.output(CIRC_FAN_GPIO, GPIO.HIGH if enabled else GPIO.LOW)
 
     update_status(
         "UPDATE status SET circfan=%s WHERE id=1",
-        (1 if enabled else 0,)
+        (1 if enabled else 0,),
     )
 
 
-def window_control(
-    current_temp,
-    target_temp,
-    temp_range,
-    override
-):
+def window_control(current_temp, target_temp, temp_range, override):
+    """Window hysteresis with cooldown and reversal lockout."""
+    effective_range = dynamic_hysteresis_range("window", temp_range)
 
-    half = temp_range / 2
-
+    half = effective_range / 2
     lower = target_temp - half
     upper = target_temp + half
 
@@ -817,13 +868,10 @@ def window_control(
 
     if override:
         should_open = True
-
     elif current_temp >= upper:
         should_open = True
-
     elif current_temp <= lower:
         should_open = False
-
     else:
         return
 
@@ -839,59 +887,49 @@ def window_control(
 # ================================================================
 
 def main():
-
-    logger.info("Greenhouse Controller v4.2 starting.")
+    logger.info("Greenhouse Controller v4.3 starting.")
 
     setup_gpio()
 
-    # Preserve original startup DB reset behavior.
     update_status(
         """
         UPDATE status
         SET heater=0, fan=0, circfan=0, window=0
         WHERE id=1
         """,
-        ()
+        (),
     )
 
     time.sleep(5)
 
     try:
-
         while True:
-
             sensors = get_sensor_data()
-
-            current_temp = select_working_temperature(
-                sensors
-            )
+            current_temp = select_working_temperature(sensors)
 
             settings = get_schedule_settings()
-
             overrides = get_override_settings()
 
             ventilation_control(
                 current_temp,
                 settings["hightemp"],
                 settings["hightemprange"],
-                overrides["fan"]
+                overrides["fan"],
             )
 
             heater_control(
                 current_temp,
                 settings["lowtemp"],
-                settings["lowtemprange"]
+                settings["lowtemprange"],
             )
 
-            circulation_control(
-                settings["circfan"]
-            )
+            circulation_control(settings["circfan"])
 
             window_control(
                 current_temp,
                 settings["windowtemp"],
                 settings["windowtemprange"],
-                overrides["window"]
+                overrides["window"],
             )
 
             log_status_if_changed()
@@ -899,19 +937,13 @@ def main():
             time.sleep(20)
 
     except KeyboardInterrupt:
-
         logger.info("KeyboardInterrupt received.")
         shutdownnow()
 
     except Exception:
-
         logger.exception("Fatal controller exception.")
         shutdownnow()
 
-
-# ================================================================
-# ENTRY POINT
-# ================================================================
 
 if __name__ == "__main__":
     main()
