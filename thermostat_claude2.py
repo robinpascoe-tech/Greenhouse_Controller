@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #################################################################
-# Greenhouse Controller v4.3.1
+# Greenhouse Controller v4.3.2
 #
 # Direct drop-in replacement for the original controller with:
 # - Original DB-driven schedule system
@@ -13,8 +13,13 @@
 # - Window reversal lockout
 # - Dynamic hysteresis widening
 #
-# v4.3.1 fixes:
-# - 24s + 16s close sequence is now the standard everywhere
+# v4.3.2 fixes:
+# - Operator overrides bypass short-cycle protection
+# - Override-triggered actuator changes still count toward cycle history
+# - Startup DB reset failures are logged but do not prevent controller startup
+#
+# v4.3.1 fixes retained:
+# - 24s + 16s close sequence is the standard close behavior everywhere
 # - Forced startup/shutdown window closure does NOT start cooldown timer
 # - Hardened DB datetime parsing
 #################################################################
@@ -164,7 +169,7 @@ WINDOW_REVERSAL_LOCKOUT_SECONDS = 60
 CYCLE_HISTORY_SECONDS = 3600
 
 # In-memory state is intentionally used here.
-# It is adequate for this project and avoids adding SQL complexity.
+# This avoids additional SQL schema complexity and is sufficient for this project.
 ACTUATOR_STATE = {
     "heater": {
         "state": False,
@@ -220,11 +225,7 @@ def parse_db_datetime(value):
     if isinstance(value, datetime):
         dt = value
     else:
-        text = str(value).strip()
-
-        # MySQL DATETIME normally uses a space between date and time.
-        # datetime.fromisoformat handles both ' ' and 'T' separators.
-        dt = datetime.fromisoformat(text)
+        dt = datetime.fromisoformat(str(value).strip())
 
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -393,6 +394,9 @@ def record_actuator_change(actuator, new_state):
 
     Forced startup/shutdown window moves intentionally bypass this so they do
     not poison the normal operating cooldown timer.
+
+    Operator overrides DO record because they are real operational actuator
+    movements and should count toward cycle history.
     """
 
     now = time.monotonic()
@@ -408,7 +412,8 @@ def actuator_can_change(actuator, desired_state):
     """
     Enforce minimum ON/OFF durations.
 
-    Emergency shutdown and forced startup close bypass this function.
+    Emergency shutdown, forced startup close, and operator overrides may bypass
+    this function by design.
     """
 
     current_state = ACTUATOR_STATE[actuator]["state"]
@@ -487,6 +492,9 @@ def window_direction_allowed(direction):
     Prevent rapid window direction reversal.
 
     This protects relays, motors, and gear mechanisms.
+
+    Operator window override bypasses this by design because it represents a
+    deliberate manual command.
     """
 
     state = ACTUATOR_STATE["window"]
@@ -521,7 +529,7 @@ def setup_gpio():
 
     The forced startup close updates DB window state but does not record an
     actuator cycle, so the controller can still open windows immediately after
-    startup if temperature requires it.
+    startup if temperature or override requires it.
     """
 
     outputs = [
@@ -560,6 +568,9 @@ def open_windows(force=False, record=True):
     Original timing preserved:
     - rear window: 35s
     - roof window: 14s
+
+    force=True bypasses short-cycle/reversal protection.
+    record=True still records the actuator move for cycle analysis.
     """
 
     if not force:
@@ -601,8 +612,8 @@ def close_windows(force=False, record=True):
     """
     Close windows using the standard close sequence.
 
-    v4.3.1 design decision:
-    - 24s + 16s is now the standard close sequence everywhere:
+    v4.3.2 design decision:
+    - 24s + 16s is the standard close sequence everywhere:
       normal close, startup close, and emergency shutdown close.
     - Forced startup/shutdown closes may update DB state without recording
       an anti-cycle transition.
@@ -873,7 +884,12 @@ def heater_control(current_temp, low_temp, low_range):
 
 
 def ventilation_control(current_temp, high_temp, high_range, override):
-    """Ventilation fan hysteresis with override and short-cycle protection."""
+    """
+    Ventilation fan hysteresis with override and short-cycle protection.
+
+    Operator override intentionally bypasses short-cycle protection but still
+    records the actuator transition.
+    """
 
     effective_range = dynamic_hysteresis_range("fan", high_range)
 
@@ -883,14 +899,22 @@ def ventilation_control(current_temp, high_temp, high_range, override):
 
     if override:
         fan_on = True
+        bypass_protection = True
     elif current_temp >= upper:
         fan_on = True
+        bypass_protection = False
     elif current_temp <= lower:
         fan_on = False
+        bypass_protection = False
     else:
         return
 
-    if not actuator_can_change("fan", fan_on):
+    current_state = ACTUATOR_STATE["fan"]["state"]
+
+    if current_state == fan_on:
+        return
+
+    if not bypass_protection and not actuator_can_change("fan", fan_on):
         return
 
     if fan_on:
@@ -923,7 +947,12 @@ def circulation_control(enabled):
 
 
 def window_control(current_temp, target_temp, temp_range, override):
-    """Window hysteresis with cooldown and reversal lockout."""
+    """
+    Window hysteresis with cooldown and reversal lockout.
+
+    Operator override intentionally bypasses window short-cycle and reversal
+    protection but still records the movement.
+    """
 
     effective_range = dynamic_hysteresis_range("window", temp_range)
 
@@ -935,18 +964,21 @@ def window_control(current_temp, target_temp, temp_range, override):
 
     if override:
         should_open = True
+        bypass_protection = True
     elif current_temp >= upper:
         should_open = True
+        bypass_protection = False
     elif current_temp <= lower:
         should_open = False
+        bypass_protection = False
     else:
         return
 
     if should_open and current_state == 0:
-        open_windows()
+        open_windows(force=bypass_protection, record=True)
 
     elif not should_open and current_state == 1:
-        close_windows()
+        close_windows(force=bypass_protection, record=True)
 
 
 # ================================================================
@@ -954,18 +986,23 @@ def window_control(current_temp, target_temp, temp_range, override):
 # ================================================================
 
 def main():
-    logger.info("Greenhouse Controller v4.3.1 starting.")
+    logger.info("Greenhouse Controller v4.3.2 starting.")
 
     setup_gpio()
 
-    update_status(
-        """
-        UPDATE status
-        SET heater=0, fan=0, circfan=0, window=0
-        WHERE id=1
-        """,
-        (),
-    )
+    # Preserve original startup DB reset behavior, but do not let DB reset
+    # failure prevent the controller from starting.
+    try:
+        update_status(
+            """
+            UPDATE status
+            SET heater=0, fan=0, circfan=0, window=0
+            WHERE id=1
+            """,
+            (),
+        )
+    except Exception:
+        logger.exception("Startup status reset failed; continuing controller startup.")
 
     time.sleep(5)
 
