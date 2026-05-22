@@ -101,6 +101,7 @@ config/
 docs/
   INSTALL.md                 Installation guide.
   ENGINEERING_OVERVIEW.md    System architecture and behavior notes.
+  ROADMAP.md                 Future development roadmap.
 
 html/
   Legacy PHP dashboard files.
@@ -166,6 +167,7 @@ Then follow the full guide:
 
 - [Installation Guide](docs/INSTALL.md)
 - [Engineering Overview](docs/ENGINEERING_OVERVIEW.md)
+- [Development Roadmap](docs/ROADMAP.md)
 
 ## Configuration
 
@@ -264,6 +266,7 @@ under the same license as the project: GPL-3.0-or-later. See
 
 Good areas for future improvement include:
 
+- adaptive ventilation based on outside temperature and thermal trends
 - systemd timer examples for sensor and health scripts
 - modern dashboard or API
 - automated install script
@@ -271,6 +274,8 @@ Good areas for future improvement include:
 - support for additional sensor types
 - packaged tests that do not require a live MariaDB instance
 - documentation for relay wiring and GPIO safety
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for a more detailed development roadmap.
 
 Before opening a pull request:
 
