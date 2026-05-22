@@ -31,6 +31,7 @@ import logging
 import logging.handlers
 import configparser
 import signal
+from dataclasses import dataclass
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -936,26 +937,98 @@ def get_window_state():
 # CONTROL FUNCTIONS
 # ================================================================
 
+@dataclass(frozen=True)
+class ActuatorDecision:
+    """
+    Desired actuator state from pure control decision logic.
+
+    state:
+        True means ON/open, False means OFF/closed, None means hold current
+        state.
+    bypass_protection:
+        True when an operator override should bypass short-cycle or reversal
+        protection while still recording the actuator movement.
+    reason:
+        Short label useful for logging and future simulation assertions.
+    """
+
+    state: bool | None
+    bypass_protection: bool = False
+    reason: str = "hold"
+
+
+def hysteresis_bounds(target_temp, temp_range):
+    """Return lower and upper thresholds around a target temperature."""
+
+    half = Decimal(temp_range) / 2
+    return Decimal(target_temp) - half, Decimal(target_temp) + half
+
+
+def decide_heater_state(current_temp, low_temp, effective_range):
+    """Return heater decision from low-temperature hysteresis only."""
+
+    lower, upper = hysteresis_bounds(low_temp, effective_range)
+
+    if current_temp <= lower:
+        return ActuatorDecision(True, reason="below_low_threshold")
+
+    if current_temp >= upper:
+        return ActuatorDecision(False, reason="above_low_threshold")
+
+    return ActuatorDecision(None)
+
+
+def decide_fan_state(current_temp, high_temp, effective_range, override):
+    """Return ventilation fan decision from override and high-temperature hysteresis."""
+
+    if override:
+        return ActuatorDecision(True, bypass_protection=True, reason="override")
+
+    lower, upper = hysteresis_bounds(high_temp, effective_range)
+
+    if current_temp >= upper:
+        return ActuatorDecision(True, reason="above_high_threshold")
+
+    if current_temp <= lower:
+        return ActuatorDecision(False, reason="below_high_threshold")
+
+    return ActuatorDecision(None)
+
+
+def decide_window_state(current_temp, target_temp, effective_range, override):
+    """Return window decision from override and window-temperature hysteresis."""
+
+    if override:
+        return ActuatorDecision(True, bypass_protection=True, reason="override")
+
+    lower, upper = hysteresis_bounds(target_temp, effective_range)
+
+    if current_temp >= upper:
+        return ActuatorDecision(True, reason="above_window_threshold")
+
+    if current_temp <= lower:
+        return ActuatorDecision(False, reason="below_window_threshold")
+
+    return ActuatorDecision(None)
+
+
 def heater_control(current_temp, low_temp, low_range):
     """Heater hysteresis with short-cycle protection."""
 
     effective_range = dynamic_hysteresis_range("heater", low_range)
+    decision = decide_heater_state(current_temp, low_temp, effective_range)
 
-    half = effective_range / 2
-    lower = low_temp - half
-    upper = low_temp + half
-
-    if current_temp <= lower:
-        if actuator_can_change("heater", True):
+    if decision.state is True:
+        if actuator_can_change("heater", decision.state):
             GPIO.output(HEATER_GPIO, GPIO.HIGH)
-            record_actuator_change("heater", True)
+            record_actuator_change("heater", decision.state)
             update_status("UPDATE status SET heater=%s WHERE id=1", (1,))
             logger.info("Heater ON")
 
-    elif current_temp >= upper:
-        if actuator_can_change("heater", False):
+    elif decision.state is False:
+        if actuator_can_change("heater", decision.state):
             GPIO.output(HEATER_GPIO, GPIO.LOW)
-            record_actuator_change("heater", False)
+            record_actuator_change("heater", decision.state)
             update_status("UPDATE status SET heater=%s WHERE id=1", (0,))
             logger.info("Heater OFF")
 
@@ -969,32 +1042,28 @@ def ventilation_control(current_temp, high_temp, high_range, override):
     """
 
     effective_range = dynamic_hysteresis_range("fan", high_range)
+    decision = decide_fan_state(
+        current_temp,
+        high_temp,
+        effective_range,
+        override,
+    )
 
-    half = effective_range / 2
-    lower = high_temp - half
-    upper = high_temp + half
-
-    if override:
-        fan_on = True
-        bypass_protection = True
-    elif current_temp >= upper:
-        fan_on = True
-        bypass_protection = False
-    elif current_temp <= lower:
-        fan_on = False
-        bypass_protection = False
-    else:
+    if decision.state is None:
         return
 
     current_state = ACTUATOR_STATE["fan"]["state"]
 
-    if current_state == fan_on:
+    if current_state == decision.state:
         return
 
-    if not bypass_protection and not actuator_can_change("fan", fan_on):
+    if not decision.bypass_protection and not actuator_can_change(
+        "fan",
+        decision.state,
+    ):
         return
 
-    if fan_on:
+    if decision.state:
         GPIO.output(VENT_FAN_GPIO, GPIO.HIGH)
         time.sleep(1)
         GPIO.output(AUX_VENT_FAN_GPIO, GPIO.HIGH)
@@ -1004,11 +1073,11 @@ def ventilation_control(current_temp, high_temp, high_range, override):
         GPIO.output(AUX_VENT_FAN_GPIO, GPIO.LOW)
         logger.info("Ventilation fans OFF")
 
-    record_actuator_change("fan", fan_on)
+    record_actuator_change("fan", decision.state)
 
     update_status(
         "UPDATE status SET fan=%s WHERE id=1",
-        (1 if fan_on else 0,),
+        (1 if decision.state else 0,),
     )
 
 
@@ -1032,30 +1101,23 @@ def window_control(current_temp, target_temp, temp_range, override):
     """
 
     effective_range = dynamic_hysteresis_range("window", temp_range)
-
-    half = effective_range / 2
-    lower = target_temp - half
-    upper = target_temp + half
+    decision = decide_window_state(
+        current_temp,
+        target_temp,
+        effective_range,
+        override,
+    )
 
     current_state = get_window_state()
 
-    if override:
-        should_open = True
-        bypass_protection = True
-    elif current_temp >= upper:
-        should_open = True
-        bypass_protection = False
-    elif current_temp <= lower:
-        should_open = False
-        bypass_protection = False
-    else:
+    if decision.state is None:
         return
 
-    if should_open and current_state == 0:
-        open_windows(force=bypass_protection, record=True)
+    if decision.state and current_state == 0:
+        open_windows(force=decision.bypass_protection, record=True)
 
-    elif not should_open and current_state == 1:
-        close_windows(force=bypass_protection, record=True)
+    elif not decision.state and current_state == 1:
+        close_windows(force=decision.bypass_protection, record=True)
 
 
 # ================================================================

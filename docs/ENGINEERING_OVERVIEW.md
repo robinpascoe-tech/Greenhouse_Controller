@@ -122,6 +122,15 @@ temperature only.
 
 ## Actuator Logic
 
+The controller separates the first layer of actuator decision-making from the
+GPIO/SQL side effects. Pure helper functions decide whether the heater, fans,
+or windows should turn on, turn off, open, close, or hold state based on
+thresholds and overrides. The control functions then apply those decisions
+through short-cycle protection, GPIO writes, and `status` updates.
+
+This split keeps the current behavior inspectable and gives future adaptive
+logic a safer place to evolve before it touches physical outputs.
+
 ### Heater
 
 The heater uses low-temperature hysteresis:

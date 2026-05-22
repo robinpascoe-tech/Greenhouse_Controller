@@ -378,6 +378,84 @@ def simulate_heater(thermostat, clock):
     }
 
 
+def test_decision_helpers(thermostat):
+    """Verify pure actuator decisions before GPIO/SQL side effects are applied."""
+    cases = {
+        "heater_on": thermostat.decide_heater_state(
+            Decimal("8.9"),
+            Decimal("10"),
+            Decimal("2"),
+        ),
+        "heater_hold": thermostat.decide_heater_state(
+            Decimal("10.0"),
+            Decimal("10"),
+            Decimal("2"),
+        ),
+        "heater_off": thermostat.decide_heater_state(
+            Decimal("11.1"),
+            Decimal("10"),
+            Decimal("2"),
+        ),
+        "fan_on": thermostat.decide_fan_state(
+            Decimal("26.1"),
+            Decimal("25"),
+            Decimal("2"),
+            False,
+        ),
+        "fan_hold": thermostat.decide_fan_state(
+            Decimal("25.0"),
+            Decimal("25"),
+            Decimal("2"),
+            False,
+        ),
+        "fan_off": thermostat.decide_fan_state(
+            Decimal("23.9"),
+            Decimal("25"),
+            Decimal("2"),
+            False,
+        ),
+        "fan_override": thermostat.decide_fan_state(
+            Decimal("10"),
+            Decimal("25"),
+            Decimal("2"),
+            True,
+        ),
+        "window_open": thermostat.decide_window_state(
+            Decimal("31.1"),
+            Decimal("30"),
+            Decimal("2"),
+            False,
+        ),
+        "window_hold": thermostat.decide_window_state(
+            Decimal("30.0"),
+            Decimal("30"),
+            Decimal("2"),
+            False,
+        ),
+        "window_close": thermostat.decide_window_state(
+            Decimal("28.9"),
+            Decimal("30"),
+            Decimal("2"),
+            False,
+        ),
+        "window_override": thermostat.decide_window_state(
+            Decimal("10"),
+            Decimal("30"),
+            Decimal("2"),
+            True,
+        ),
+    }
+
+    return {
+        name: {
+            "state": decision.state,
+            "bypass_protection": decision.bypass_protection,
+            "reason": decision.reason,
+        }
+        for name, decision in cases.items()
+    }
+
+
 def simulate_fan(thermostat, clock):
     reset_controller_state(thermostat, clock, thermostat.GPIO)
     temps = [Decimal("26.3"), Decimal("23.7")] * 16
@@ -1297,6 +1375,7 @@ def main():
     thermostat, sensor_health, _read_sensors, clock, gpio = patch_modules()
 
     results = {
+        "decision_helpers": test_decision_helpers(thermostat),
         "day_night_cycle": simulate_day_night_cycle(thermostat, clock),
         "solar_greenhouse_cycle_live_settings": simulate_solar_greenhouse_cycle(
             thermostat, clock
