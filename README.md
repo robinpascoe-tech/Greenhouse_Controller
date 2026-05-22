@@ -88,6 +88,7 @@ tools/
   simulation_harness.py      Deterministic controller simulation suite.
   simulate_sensors.py        Fake currenttemp writer for development.
   gpio_monitor.py            Read-only GPIO terminal monitor.
+  gpio_integration_test.py   Guarded real-GPIO integration test.
 
 sql/
   schema.sql                 Fresh database schema.
@@ -232,6 +233,18 @@ The harness covers scenarios such as:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+
+For Raspberry Pi GPIO integration testing, use the guarded hardware test. It
+drives the configured GPIO outputs, samples pin state with `pinctrl`, uses a
+throwaway database, shortens relay timing, and leaves outputs LOW at exit.
+
+```bash
+export GREENHOUSE_ALLOW_REAL_GPIO_TEST=1
+export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
+python3 tools/gpio_integration_test.py
+```
+
+Only run this when it is safe for the Pi GPIO pins to energize.
 
 ## Legacy Dashboard
 

@@ -29,6 +29,7 @@ tools/
   simulation_harness.py      Deterministic controller simulation/test harness.
   simulate_sensors.py        Writes fake currenttemp values for development.
   gpio_monitor.py            Read-only terminal GPIO state monitor.
+  gpio_integration_test.py   Guarded real-GPIO integration test.
 
 sql/
   schema.sql                 Fresh database schema.
@@ -277,6 +278,31 @@ throwaway test database. Set the password with:
 ```bash
 export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
 python3 tools/simulation_harness.py
+```
+
+## GPIO Integration Testing
+
+`tools/gpio_integration_test.py` provides a guarded hardware test for the
+Raspberry Pi GPIO layer. It is intended for bench testing after simulation but
+before live greenhouse soak testing.
+
+The test:
+
+- requires `GREENHOUSE_ALLOW_REAL_GPIO_TEST=1`
+- creates a throwaway MariaDB database
+- imports the real controller and real GPIO backend
+- shortens relay timing so window motor pulses are brief
+- reads pin state independently with `pinctrl`
+- verifies heater, fan, circulation fan, and window GPIO behavior
+- verifies relevant `status` table updates
+- leaves all monitored outputs LOW and drops the throwaway database
+
+Run it only when it is safe for the configured GPIO pins to energize:
+
+```bash
+export GREENHOUSE_ALLOW_REAL_GPIO_TEST=1
+export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
+python3 tools/gpio_integration_test.py
 ```
 
 ## Deployment Notes

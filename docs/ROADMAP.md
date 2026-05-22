@@ -135,6 +135,11 @@ control logic.
 
 Keep growing the simulation harness as smarter behavior is added.
 
+Status: a guarded GPIO integration test is available as
+`tools/gpio_integration_test.py`. It drives real Raspberry Pi GPIO outputs,
+samples pin state with `pinctrl`, uses a throwaway database, and should be run
+only when it is safe for GPIO pins to energize.
+
 Important future scenarios:
 
 - woodstove overheating while outside air is very cold
