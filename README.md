@@ -1,5 +1,7 @@
 # Greenhouse Controller
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 A Raspberry Pi greenhouse automation project for reading DS18B20 temperature
 sensors, storing greenhouse state in MariaDB, and controlling heater,
 ventilation fans, circulation fan, and motorized windows through GPIO relays.
@@ -242,6 +244,10 @@ files on a public or production system.
 
 Contributions, ideas, and adaptations are welcome.
 
+By contributing to this repository, you agree that your contribution is provided
+under the same license as the project: GPL-3.0-or-later. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for contributor guidelines.
+
 Good areas for future improvement include:
 
 - systemd timer examples for sensor and health scripts
@@ -277,5 +283,5 @@ before using it in your own greenhouse.
 
 ## License
 
-No license file is currently included. Add a license before expecting others to
-reuse or contribute code formally.
+This project is licensed under the GNU General Public License v3.0 or later.
+See [LICENSE](LICENSE) for the full license text.
