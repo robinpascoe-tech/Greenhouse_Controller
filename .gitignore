@@ -8,6 +8,7 @@ env/
 .env
 greenhouse.conf
 *.log
+*.bundle
 
 .DS_Store
 Thumbs.db
