@@ -116,9 +116,10 @@ If none of those readings are fresh, the controller enters emergency shutdown:
 fans and heater are turned off, windows are closed, GPIO cleanup is called, and
 the process exits.
 
-Outside temperature is recorded and useful for dashboards or future control
-logic, but the current controller makes actuator decisions from inside
-temperature only.
+Outside temperature is optional context for adaptive cooling decisions. If
+`OutsideTemp` is missing or stale, the controller falls back to the original
+inside-temperature-only fan/window behavior. Outside temperature is not
+currently used for heater decisions.
 
 ## Actuator Logic
 
@@ -154,6 +155,14 @@ turn off when current_temp <= hightemp - (hightemprange / 2)
 The controller starts the main fan, waits briefly, then starts the auxiliary
 fan. Overrides can force the fans on until the override expiration time.
 
+When fresh outside temperature is available, fan decisions are coordinated with
+window decisions. In very cold outside conditions, the controller prefers fans
+before windows to reduce large heat dumps and overcooling. If outside air is
+near or moderately cooler than inside air, the controller prefers windows for
+gentler cooling unless urgent overheating requires both paths. If outside air
+is warmer than inside air, the controller avoids opening windows and only uses
+fans once the fan threshold calls for them.
+
 ### Circulation Fan
 
 The circulation fan follows the active schedule row directly. It is not tied to
@@ -167,6 +176,10 @@ window state in SQL to avoid repeatedly issuing open/close sequences.
 Window movement includes relay timing for the rear window and roof window. A
 direction reversal lockout protects motors and relays from rapid open/close
 direction changes.
+
+Window overrides still force windows open until expiration. Manual overrides
+intentionally bypass the adaptive cooling preference because they represent an
+operator command.
 
 ## Short-Cycle Protection
 

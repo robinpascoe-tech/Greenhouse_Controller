@@ -13,6 +13,10 @@ trends, hardware limits, and operational risk.
 Use outside temperature and recent temperature trends to choose cooling actions
 more intelligently.
 
+Status: initial outside-temperature-aware fan/window selection is implemented
+on `develop`. Further work can refine thresholds after real greenhouse testing
+and add trend/rate-of-change inputs.
+
 Initial rule-based behavior could include:
 
 - If the greenhouse is overheating while outside air is very cold, prefer
@@ -157,4 +161,3 @@ The simulation harness should remain the confidence engine for behavior changes.
 6. Add expanded trend-based alerting.
 7. Add forecast ingestion and forecast-aware decisions.
 8. Build a modern dashboard around the improved state model.
-

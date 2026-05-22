@@ -139,7 +139,13 @@ SENSOR_PRIORITY = [
     "BackTemp",
 ]
 
+OUTSIDE_SENSOR_NAME = "OutsideTemp"
 MAX_SENSOR_AGE_SECONDS = 60
+
+# Cooling strategy tuning. These conservative defaults only affect which
+# cooling method is preferred once SQL thresholds already call for cooling.
+COLD_OUTSIDE_TEMP = Decimal("5")
+OUTSIDE_NEAR_INSIDE_DELTA = Decimal("3")
 
 
 # ================================================================
@@ -794,6 +800,31 @@ def select_working_temperature(sensors):
     shutdownnow()
 
 
+def select_outside_temperature(sensors):
+    """
+    Return fresh outside temperature if available.
+
+    Outside temperature improves cooling decisions, but it is not a safety
+    prerequisite. If the outside sensor is missing or stale, the controller
+    falls back to the original inside-temperature-only behavior.
+    """
+
+    sensor = sensors.get(OUTSIDE_SENSOR_NAME)
+
+    if not sensor:
+        logger.debug("Outside temperature unavailable; using legacy cooling.")
+        return None
+
+    if sensor["age"] > MAX_SENSOR_AGE_SECONDS:
+        logger.warning(
+            "Outside temperature is stale (%.0fs old); using legacy cooling.",
+            sensor["age"],
+        )
+        return None
+
+    return sensor["temp"]
+
+
 # ================================================================
 # SCHEDULE / OVERRIDES
 # ================================================================
@@ -957,6 +988,20 @@ class ActuatorDecision:
     reason: str = "hold"
 
 
+@dataclass(frozen=True)
+class CoolingDecision:
+    """
+    Paired fan/window decision from greenhouse-aware cooling strategy.
+
+    Keeping the pair together lets the controller prefer one cooling method
+    without losing the existing per-actuator safety checks.
+    """
+
+    fan: ActuatorDecision
+    window: ActuatorDecision
+    strategy: str = "legacy"
+
+
 def hysteresis_bounds(target_temp, temp_range):
     """Return lower and upper thresholds around a target temperature."""
 
@@ -1012,6 +1057,99 @@ def decide_window_state(current_temp, target_temp, effective_range, override):
     return ActuatorDecision(None)
 
 
+def decide_cooling_strategy(
+    current_temp,
+    outside_temp,
+    high_temp,
+    high_range,
+    window_temp,
+    window_range,
+    fan_override,
+    window_override,
+):
+    """
+    Choose coordinated fan/window cooling behavior.
+
+    The strategy preserves manual overrides and falls back to the original
+    independent fan/window hysteresis when outside temperature is unavailable.
+    Adaptive behavior only changes opening/cooling choices once the configured
+    thresholds already call for cooling.
+    """
+
+    current_temp = Decimal(current_temp)
+    high_temp = Decimal(high_temp)
+    high_range = Decimal(high_range)
+    window_temp = Decimal(window_temp)
+    window_range = Decimal(window_range)
+
+    fan = decide_fan_state(current_temp, high_temp, high_range, fan_override)
+    window = decide_window_state(
+        current_temp,
+        window_temp,
+        window_range,
+        window_override,
+    )
+
+    if fan_override or window_override:
+        return CoolingDecision(fan, window, "override")
+
+    if outside_temp is None:
+        return CoolingDecision(fan, window, "legacy_no_outside_temp")
+
+    outside_temp = Decimal(outside_temp)
+    fan_lower, fan_upper = hysteresis_bounds(high_temp, high_range)
+    window_lower, _window_upper = hysteresis_bounds(window_temp, window_range)
+    urgent_temp = max(high_temp + high_range, window_temp + window_range)
+
+    if current_temp >= urgent_temp:
+        return CoolingDecision(
+            ActuatorDecision(True, reason="urgent_cooling"),
+            ActuatorDecision(True, reason="urgent_cooling"),
+            "urgent_cooling",
+        )
+
+    if current_temp <= min(fan_lower, window_lower):
+        return CoolingDecision(fan, window, "cooling_not_needed")
+
+    cooling_requested = fan.state is True or window.state is True
+
+    if not cooling_requested:
+        return CoolingDecision(fan, window, "within_hysteresis")
+
+    outside_delta = current_temp - outside_temp
+
+    if outside_temp <= COLD_OUTSIDE_TEMP:
+        return CoolingDecision(
+            ActuatorDecision(True, reason="cold_outside_fan_preferred"),
+            ActuatorDecision(False, reason="cold_outside_window_avoided"),
+            "cold_outside_fan_preferred",
+        )
+
+    if outside_delta < 0:
+        return CoolingDecision(
+            (
+                ActuatorDecision(True, reason="outside_warmer_fan_threshold")
+                if current_temp >= fan_upper
+                else fan
+            ),
+            ActuatorDecision(False, reason="outside_warmer_window_avoided"),
+            "outside_warmer_window_avoided",
+        )
+
+    if outside_delta <= OUTSIDE_NEAR_INSIDE_DELTA:
+        return CoolingDecision(
+            ActuatorDecision(False, reason="near_outside_window_preferred"),
+            ActuatorDecision(True, reason="near_outside_window_preferred"),
+            "near_outside_window_preferred",
+        )
+
+    return CoolingDecision(
+        ActuatorDecision(False, reason="cool_outside_window_preferred"),
+        ActuatorDecision(True, reason="cool_outside_window_preferred"),
+        "cool_outside_window_preferred",
+    )
+
+
 def heater_control(current_temp, low_temp, low_range):
     """Heater hysteresis with short-cycle protection."""
 
@@ -1033,21 +1171,8 @@ def heater_control(current_temp, low_temp, low_range):
             logger.info("Heater OFF")
 
 
-def ventilation_control(current_temp, high_temp, high_range, override):
-    """
-    Ventilation fan hysteresis with override and short-cycle protection.
-
-    Operator override intentionally bypasses short-cycle protection but still
-    records the actuator transition.
-    """
-
-    effective_range = dynamic_hysteresis_range("fan", high_range)
-    decision = decide_fan_state(
-        current_temp,
-        high_temp,
-        effective_range,
-        override,
-    )
+def apply_fan_decision(decision):
+    """Apply a fan decision through GPIO, SQL, and short-cycle protection."""
 
     if decision.state is None:
         return
@@ -1081,6 +1206,24 @@ def ventilation_control(current_temp, high_temp, high_range, override):
     )
 
 
+def ventilation_control(current_temp, high_temp, high_range, override):
+    """
+    Ventilation fan hysteresis with override and short-cycle protection.
+
+    Operator override intentionally bypasses short-cycle protection but still
+    records the actuator transition.
+    """
+
+    effective_range = dynamic_hysteresis_range("fan", high_range)
+    decision = decide_fan_state(
+        current_temp,
+        high_temp,
+        effective_range,
+        override,
+    )
+    apply_fan_decision(decision)
+
+
 def circulation_control(enabled):
     """Circulation fan follows schedule setting directly."""
 
@@ -1090,6 +1233,21 @@ def circulation_control(enabled):
         "UPDATE status SET circfan=%s WHERE id=1",
         (1 if enabled else 0,),
     )
+
+
+def apply_window_decision(decision):
+    """Apply a window decision through motor sequencing and SQL state."""
+
+    if decision.state is None:
+        return
+
+    current_state = get_window_state()
+
+    if decision.state and current_state == 0:
+        open_windows(force=decision.bypass_protection, record=True)
+
+    elif not decision.state and current_state == 1:
+        close_windows(force=decision.bypass_protection, record=True)
 
 
 def window_control(current_temp, target_temp, temp_range, override):
@@ -1107,17 +1265,45 @@ def window_control(current_temp, target_temp, temp_range, override):
         effective_range,
         override,
     )
+    apply_window_decision(decision)
 
-    current_state = get_window_state()
 
-    if decision.state is None:
-        return
+def get_cooling_decision(current_temp, outside_temp, settings, overrides):
+    """Return coordinated fan/window cooling decision for the current state."""
 
-    if decision.state and current_state == 0:
-        open_windows(force=decision.bypass_protection, record=True)
+    fan_range = dynamic_hysteresis_range("fan", settings["hightemprange"])
+    window_range = dynamic_hysteresis_range("window", settings["windowtemprange"])
 
-    elif not decision.state and current_state == 1:
-        close_windows(force=decision.bypass_protection, record=True)
+    return decide_cooling_strategy(
+        current_temp,
+        outside_temp,
+        settings["hightemp"],
+        fan_range,
+        settings["windowtemp"],
+        window_range,
+        overrides["fan"],
+        overrides["window"],
+    )
+
+
+def cooling_control(current_temp, outside_temp, settings, overrides):
+    """
+    Coordinate fan and window cooling using outside temperature when available.
+
+    This is the first adaptive layer: it chooses which cooling path to prefer,
+    then existing actuator protections still decide whether movement is allowed.
+    """
+
+    decision = get_cooling_decision(
+        current_temp,
+        outside_temp,
+        settings,
+        overrides,
+    )
+
+    logger.debug("Cooling strategy selected: %s", decision.strategy)
+    apply_fan_decision(decision.fan)
+    apply_window_decision(decision.window)
 
 
 # ================================================================
@@ -1152,16 +1338,23 @@ def main():
         while True:
             sensors = get_sensor_data()
             current_temp = select_working_temperature(sensors)
+            outside_temp = select_outside_temperature(sensors)
 
             settings = get_schedule_settings()
             overrides = get_override_settings()
 
-            ventilation_control(
+            cooling_decision = get_cooling_decision(
                 current_temp,
-                settings["hightemp"],
-                settings["hightemprange"],
-                overrides["fan"],
+                outside_temp,
+                settings,
+                overrides,
             )
+            logger.debug(
+                "Cooling strategy selected: %s",
+                cooling_decision.strategy,
+            )
+
+            apply_fan_decision(cooling_decision.fan)
 
             heater_control(
                 current_temp,
@@ -1171,12 +1364,7 @@ def main():
 
             circulation_control(settings["circfan"])
 
-            window_control(
-                current_temp,
-                settings["windowtemp"],
-                settings["windowtemprange"],
-                overrides["window"],
-            )
+            apply_window_decision(cooling_decision.window)
 
             log_status_if_changed()
 

@@ -456,6 +456,109 @@ def test_decision_helpers(thermostat):
     }
 
 
+def describe_cooling_decision(decision):
+    return {
+        "strategy": decision.strategy,
+        "fan": {
+            "state": decision.fan.state,
+            "bypass_protection": decision.fan.bypass_protection,
+            "reason": decision.fan.reason,
+        },
+        "window": {
+            "state": decision.window.state,
+            "bypass_protection": decision.window.bypass_protection,
+            "reason": decision.window.reason,
+        },
+    }
+
+
+def test_outside_aware_cooling_strategy(thermostat):
+    """Exercise coordinated fan/window decisions across outside conditions."""
+
+    high = Decimal("36")
+    high_range = Decimal("4")
+    window = Decimal("33")
+    window_range = Decimal("6")
+
+    cases = {
+        "legacy_without_outside": thermostat.decide_cooling_strategy(
+            Decimal("37"),
+            None,
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "cold_outside_prefers_fans": thermostat.decide_cooling_strategy(
+            Decimal("37"),
+            Decimal("-5"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "near_outside_prefers_windows": thermostat.decide_cooling_strategy(
+            Decimal("37"),
+            Decimal("35"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "cool_outside_prefers_windows": thermostat.decide_cooling_strategy(
+            Decimal("37"),
+            Decimal("20"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "warmer_outside_avoids_windows": thermostat.decide_cooling_strategy(
+            Decimal("37"),
+            Decimal("39"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "urgent_cooling_uses_both": thermostat.decide_cooling_strategy(
+            Decimal("41"),
+            Decimal("-5"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+        ),
+        "override_preserved": thermostat.decide_cooling_strategy(
+            Decimal("10"),
+            Decimal("-5"),
+            high,
+            high_range,
+            window,
+            window_range,
+            True,
+            True,
+        ),
+    }
+
+    return {
+        name: describe_cooling_decision(decision)
+        for name, decision in cases.items()
+    }
+
+
 def simulate_fan(thermostat, clock):
     reset_controller_state(thermostat, clock, thermostat.GPIO)
     temps = [Decimal("26.3"), Decimal("23.7")] * 16
@@ -536,22 +639,16 @@ def simulate_day_night_cycle(thermostat, clock):
         temp = Decimal(str(round(-15 + ((math.sin(radians) + 1) / 2) * 53, 2)))
         temps.append(temp)
 
-        thermostat.ventilation_control(
+        thermostat.cooling_control(
             temp,
-            settings["hightemp"],
-            settings["hightemprange"],
-            False,
+            None,
+            settings,
+            {"fan": False, "window": False},
         )
         thermostat.heater_control(
             temp,
             settings["lowtemp"],
             settings["lowtemprange"],
-        )
-        thermostat.window_control(
-            temp,
-            settings["windowtemp"],
-            settings["windowtemprange"],
-            False,
         )
         clock.advance(15 * 60)
 
@@ -615,22 +712,16 @@ def simulate_solar_greenhouse_cycle(thermostat, clock):
         )
         settings = simulated_schedule_settings(sim_seconds)
 
-        thermostat.ventilation_control(
+        thermostat.cooling_control(
             current_temp,
-            settings["hightemp"],
-            settings["hightemprange"],
-            False,
+            outside,
+            settings,
+            {"fan": False, "window": False},
         )
         thermostat.heater_control(
             current_temp,
             settings["lowtemp"],
             settings["lowtemprange"],
-        )
-        thermostat.window_control(
-            current_temp,
-            settings["windowtemp"],
-            settings["windowtemprange"],
-            False,
         )
 
         widened["heater"] = max(
@@ -856,6 +947,37 @@ def test_partial_sensor_failure(thermostat, clock, gpio):
         "selected_when_average_stale": str(selected),
         "selected_when_average_and_front_stale": str(selected_after_front_stale),
         "cleanup_called": gpio.cleanup_called,
+    }
+
+
+def test_outside_temperature_selection(thermostat, clock, gpio):
+    reset_controller_state(thermostat, clock, gpio)
+    update_currenttemps(Decimal("20.0"), Decimal("-4.5"))
+
+    fresh = thermostat.select_outside_temperature(thermostat.get_sensor_data())
+
+    stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE currenttemp
+                SET timestamp=%s
+                WHERE Name='OutsideTemp'
+                """,
+                (stale,),
+            )
+    finally:
+        con.close()
+
+    stale_result = thermostat.select_outside_temperature(
+        thermostat.get_sensor_data()
+    )
+
+    return {
+        "fresh_outside_temp": str(fresh),
+        "stale_outside_temp_falls_back": stale_result is None,
     }
 
 
@@ -1376,6 +1498,9 @@ def main():
 
     results = {
         "decision_helpers": test_decision_helpers(thermostat),
+        "outside_aware_cooling_strategy": test_outside_aware_cooling_strategy(
+            thermostat
+        ),
         "day_night_cycle": simulate_day_night_cycle(thermostat, clock),
         "solar_greenhouse_cycle_live_settings": simulate_solar_greenhouse_cycle(
             thermostat, clock
@@ -1390,6 +1515,9 @@ def main():
         "fan_dynamic": simulate_fan(thermostat, clock),
         "window_dynamic": simulate_window(thermostat, clock),
         "partial_sensor_failure": test_partial_sensor_failure(
+            thermostat, clock, gpio
+        ),
+        "outside_temperature_selection": test_outside_temperature_selection(
             thermostat, clock, gpio
         ),
         "overrides": test_overrides(thermostat, clock),
