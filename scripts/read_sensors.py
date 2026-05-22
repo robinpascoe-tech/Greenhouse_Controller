@@ -16,6 +16,7 @@ import configparser
 from logging.handlers import RotatingFileHandler
 from decimal import Decimal
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pymysql
 
@@ -24,22 +25,30 @@ import pymysql
 # LOGGING
 # ============================================================
 
-LOG_FILE = "/home/pi/py3refactor/greenhouse_sensors.log"
+LOG_FILE = "/home/pi/Greenhouse_Controller/greenhouse_sensors.log"
 
 logger = logging.getLogger("greenhouse")
 logger.setLevel(logging.INFO)
 
-handler = RotatingFileHandler(
-    LOG_FILE,
-    maxBytes=500000,
-    backupCount=5
-)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-handler.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s"
-))
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logging.WARNING)
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
 
-logger.addHandler(handler)
+try:
+    Path(LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=500000,
+        backupCount=5,
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+except OSError as exc:
+    # Sensor logging should not prevent imports or one-off test runs.
+    logger.warning("File logging disabled: %s", exc)
 
 
 # ============================================================
@@ -63,10 +72,12 @@ TWOPLACES = Decimal("0.01")
 
 
 def d(x):
+    """Round Decimal-compatible values to two places for DB storage."""
     return Decimal(str(x)).quantize(TWOPLACES)
 
 
 def to_f(c):
+    """Convert Celsius Decimal values to Fahrenheit Decimal values."""
     return d((c * 9 / 5) + 32)
 
 
@@ -75,6 +86,12 @@ def to_f(c):
 # ============================================================
 
 def read_sensor(sensor_name, path):
+    """
+    Read one DS18B20 sensor several times and return a filtered result.
+
+    A successful reading needs five valid samples. Failures still return a
+    structured result so sensor diagnostics can capture what went wrong.
+    """
 
     readings = []
     crc_failures = 0
@@ -113,7 +130,7 @@ def read_sensor(sensor_name, path):
 
         lines = text.split("\n")
 
-        # CRC validation
+        # A DS18B20 line ending in YES means the kernel accepted the CRC.
         if not lines or "YES" not in lines[0]:
             crc_failures += 1
             time.sleep(0.1)
@@ -125,7 +142,8 @@ def read_sensor(sensor_name, path):
         except (IndexError, ValueError):
             continue
 
-        # reject invalid sensor spikes
+        # 85 C is the DS18B20 power-on sentinel. The wider range check catches
+        # disconnected or nonsensical values without rejecting plausible weather.
         if temp == 85.0 or temp < -50 or temp > 100:
             continue
 
@@ -138,7 +156,7 @@ def read_sensor(sensor_name, path):
 
     median = readings[len(readings)//2]
 
-    # trimmed mean (removes outliers)
+    # Trimmed mean removes the high/low samples from each five-reading burst.
     trimmed = readings[1:-1]
     avg = sum(trimmed) / len(trimmed)
 
@@ -166,7 +184,7 @@ def read_sensor(sensor_name, path):
 # ============================================================
 
 config = configparser.ConfigParser()
-config.read("/home/pi/py3refactor/greenhouse.conf")
+config.read("/home/pi/Greenhouse_Controller/greenhouse.conf")
 
 try:
     DB_HOST = config["database"]["host"]
@@ -175,7 +193,7 @@ try:
     DB_NAME = config["database"]["database"]
 except Exception:
     DB_HOST = "localhost"
-    DB_USER = "root"
+    DB_USER = "greenhouse_app"
     DB_PASSWORD = "change_this_password"
     DB_NAME = "greenhouse"
 

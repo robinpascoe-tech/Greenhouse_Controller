@@ -33,6 +33,7 @@ import configparser
 import signal
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 import pymysql as mdb
 
@@ -78,20 +79,12 @@ UNUSED_GPIO_3 = 27
 # LOGGING
 # ================================================================
 
-LOG_FILENAME = "/home/pi/py3refactor/thermostat.log"
+LOG_FILENAME = "/home/pi/Greenhouse_Controller/thermostat.log"
 
 logger = logging.getLogger("GreenhouseController")
 logger.setLevel(logging.DEBUG)
 
 formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
-
-file_handler = logging.handlers.RotatingFileHandler(
-    LOG_FILENAME,
-    maxBytes=5 * 1024 * 1024,
-    backupCount=5,
-)
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
 
 # Also log warnings/errors to stderr for journalctl/systemd visibility.
 stream_handler = logging.StreamHandler()
@@ -99,13 +92,26 @@ stream_handler.setLevel(logging.WARNING)
 stream_handler.setFormatter(formatter)
 logger.addHandler(stream_handler)
 
+try:
+    Path(LOG_FILENAME).parent.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.handlers.RotatingFileHandler(
+        LOG_FILENAME,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+except OSError as exc:
+    # Logging should never prevent safe startup or test imports.
+    logger.warning("File logging disabled: %s", exc)
+
 
 # ================================================================
 # DATABASE CONFIGURATION
 # ================================================================
 
 config = configparser.ConfigParser()
-config.read("/home/pi/py3refactor/greenhouse.conf")
+config.read("/home/pi/Greenhouse_Controller/greenhouse.conf")
 
 try:
     DB_HOST = config["database"]["host"]
@@ -114,10 +120,10 @@ try:
     DB_NAME = config["database"]["database"]
 except Exception:
     logger.warning(
-        "Could not load greenhouse.conf. Using hardcoded DB fallback."
+        "Could not load greenhouse.conf. Using placeholder DB fallback."
     )
     DB_HOST = "localhost"
-    DB_USER = "root"
+    DB_USER = "greenhouse_app"
     DB_PASSWORD = "change_this_password"
     DB_NAME = "greenhouse"
 
@@ -216,7 +222,7 @@ def parse_db_datetime(value):
     - string like '2026-05-20 12:34:56'
     - string like '2026-05-20T12:34:56+00:00'
 
-    The controller treats naive timestamps as UTC because checksensors writes
+    The controller treats naive timestamps as UTC because read_sensors.py writes
     UTC timestamps and older MySQL DATETIME columns may not preserve timezone.
     """
 

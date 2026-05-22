@@ -41,7 +41,7 @@ DS18B20_SENTINEL_VALUES = {-127.0, 85.0}
 # ============================================================
 
 config = configparser.ConfigParser()
-config.read("/home/pi/py3refactor/greenhouse.conf")
+config.read("/home/pi/Greenhouse_Controller/greenhouse.conf")
 
 try:
     DB_HOST = config["database"]["host"]
@@ -50,7 +50,7 @@ try:
     DB_NAME = config["database"]["database"]
 except Exception:
     DB_HOST = "localhost"
-    DB_USER = "root"
+    DB_USER = "greenhouse_app"
     DB_PASSWORD = "change_this_password"
     DB_NAME = "greenhouse"
 
@@ -174,9 +174,9 @@ def parse(rows):
     """
     Convert raw DB rows into usable numeric series.
 
-    Returns:
-    - temperature values (float list)
-    - CRC failure counts
+    DS18B20 sentinel values are counted as invalid instead of being treated as
+    real temperatures. Common examples are 85 C after power-up and -127 C when
+    the sensor is disconnected or unreadable.
     """
 
     values = []
@@ -229,7 +229,8 @@ def features(cur, sensor):
     v6, _, _, _ = parse(w6)
     v24, _, _, _ = parse(w24)
 
-    # Guard clause: insufficient data
+    # Not enough samples for trend math. If all rows are failures/sentinels,
+    # return an explicit failure feature set so the caller can alert.
     if len(v1) < 8:
         if w1 and not v1 and (failures or invalid_readings):
             return {
@@ -413,7 +414,7 @@ def score(f, ema, profile):
         score -= 20
         notes.append("long drift")
 
-    # Range validation (NULL-safe FIX)
+    # Range validation only applies when sensor_profile defines expected bounds.
     if profile["expected_min"] is not None and f["median"] < profile["expected_min"]:
         score -= 10
         notes.append("below expected range")

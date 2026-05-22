@@ -1,12 +1,12 @@
 -- Migration for an existing greenhouse database dump from May 21, 2026.
--- Target: align the legacy tables with DB Tables.sql and add the new
+-- Target: align the legacy tables with schema.sql and add the new
 -- diagnostics/health/status log tables used by the Python scripts.
 --
 -- Recommended usage:
 --   1. Take a backup first:
 --      mariadb-dump -u root -p greenhouse > greenhouse_before_migration.sql
 --   2. Run this migration:
---      mariadb -u root -p greenhouse < migrate_existing_greenhouse_schema.sql
+--      mariadb -u root -p greenhouse < migrate_schema.sql
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 SET time_zone = "+00:00";
@@ -164,7 +164,7 @@ CREATE TABLE IF NOT EXISTS `sensor_profile` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
--- Legacy tables used directly by thermostat_claude2.py and check_sensors.py.
+-- Legacy tables used directly by greenhouse_controller.py and read_sensors.py.
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE `alerts`

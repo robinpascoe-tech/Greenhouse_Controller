@@ -1,0 +1,14 @@
+[database]
+host = localhost
+user = greenhouse_app
+password = change_this_password
+database = greenhouse
+
+[alerts]
+enabled = false
+smtp_server = smtp.gmail.com
+smtp_port = 587
+email_user = your_email@example.com
+email_password = your_app_password
+recipient = your_email@example.com
+cooldown_hours = 6

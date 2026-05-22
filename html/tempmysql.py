@@ -6,7 +6,7 @@ from datetime import datetime
 outputvar=''
 		
 try:
-	con = mdb.connect('localhost', 'root', 'change_this_password', 'greenhouse');
+	con = mdb.connect('localhost', 'greenhouse_app', 'change_this_password', 'greenhouse');
 	cur = con.cursor()
 	query = ("SELECT id, temperature, temperatureF, timestamp FROM currenttemp")
 	cur.execute(query)

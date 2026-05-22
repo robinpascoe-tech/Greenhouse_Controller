@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import signal
 import sys
 from datetime import datetime, timezone, timedelta
@@ -19,12 +20,20 @@ from pathlib import Path
 import pymysql
 
 
-ROOT_PASSWORD = "change_this_password"
+# The harness needs admin SQL permissions because it creates and drops a
+# throwaway database. Keep this out of source control by exporting:
+#   GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
+ROOT_PASSWORD = os.environ.get("GREENHOUSE_TEST_DB_ROOT_PASSWORD", "")
 TEST_DB = "greenhouse_controller_sim_test"
 HERE = Path(__file__).resolve().parent
+PROJECT_ROOT = HERE.parent
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+SQL_DIR = PROJECT_ROOT / "sql"
 
 
 class FakeClock:
+    """Fake monotonic clock so multi-minute relay delays complete instantly."""
+
     def __init__(self, start=10_000.0):
         self.t = float(start)
 
@@ -39,6 +48,8 @@ class FakeClock:
 
 
 class GPIORecorder:
+    """Minimal RPi.GPIO stand-in that records pin writes instead of moving relays."""
+
     BCM = "BCM"
     OUT = "OUT"
     HIGH = 1
@@ -69,6 +80,12 @@ class GPIORecorder:
 
 
 def root_conn(db=None, autocommit=True):
+    """Open a MariaDB root connection for throwaway test database setup."""
+    if not ROOT_PASSWORD:
+        raise RuntimeError(
+            "Set GREENHOUSE_TEST_DB_ROOT_PASSWORD before running the simulation harness."
+        )
+
     return pymysql.connect(
         host="localhost",
         user="root",
@@ -79,7 +96,8 @@ def root_conn(db=None, autocommit=True):
 
 
 def execute_schema():
-    schema = (HERE / "DB Tables.sql").read_text()
+    """Create a fresh throwaway database from sql/schema.sql."""
+    schema = (SQL_DIR / "schema.sql").read_text()
     schema = schema.replace("`greenhouse`", f"`{TEST_DB}`")
 
     statements = []
@@ -112,6 +130,7 @@ def execute_schema():
 
 
 def copy_live_settings():
+    """Copy live schedule values so simulations use realistic thresholds."""
     con = root_conn(autocommit=False)
     try:
         with con.cursor() as cur:
@@ -144,13 +163,14 @@ def copy_live_settings():
 
 
 def patch_modules():
-    sys.path.insert(0, str(HERE))
+    """Import runtime modules and point them at the throwaway database."""
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-    thermostat = importlib.import_module("thermostat_claude2")
+    thermostat = importlib.import_module("greenhouse_controller")
     sensor_health = importlib.import_module("sensor_health")
-    check_sensors = importlib.import_module("check_sensors")
+    read_sensors = importlib.import_module("read_sensors")
 
-    for mod in (thermostat, sensor_health, check_sensors):
+    for mod in (thermostat, sensor_health, read_sensors):
         mod.DB_HOST = "localhost"
         mod.DB_USER = "root"
         mod.DB_PASSWORD = ROOT_PASSWORD
@@ -162,10 +182,11 @@ def patch_modules():
     thermostat.time.monotonic = clock.monotonic
     thermostat.time.sleep = clock.sleep
 
-    return thermostat, sensor_health, check_sensors, clock, gpio
+    return thermostat, sensor_health, read_sensors, clock, gpio
 
 
 def reset_controller_state(thermostat, clock, gpio):
+    """Reset in-memory actuator state and singleton DB rows between tests."""
     clock.t = 10_000.0
     gpio.events.clear()
     gpio.pin_state.clear()
@@ -1019,7 +1040,7 @@ def test_empty_or_damaged_tables(thermostat, clock, gpio):
 
 def test_strict_sql_mode():
     strict_db = f"{TEST_DB}_strict"
-    schema = (HERE / "DB Tables.sql").read_text()
+    schema = (SQL_DIR / "schema.sql").read_text()
     schema = schema.replace("`greenhouse`", f"`{strict_db}`")
 
     statements = []
@@ -1273,7 +1294,7 @@ def test_alert_cooldown(sensor_health):
 
 def main():
     execute_schema()
-    thermostat, sensor_health, _check_sensors, clock, gpio = patch_modules()
+    thermostat, sensor_health, _read_sensors, clock, gpio = patch_modules()
 
     results = {
         "day_night_cycle": simulate_day_night_cycle(thermostat, clock),

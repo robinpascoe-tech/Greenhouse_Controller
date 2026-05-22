@@ -39,7 +39,7 @@ while (count==0):
 	timestamp = datetime.utcnow()
 		
 	try:
-		con = mdb.connect('localhost', 'root', 'change_this_password', 'greenhouse');
+		con = mdb.connect('localhost', 'greenhouse_app', 'change_this_password', 'greenhouse');
 		cur = con.cursor()
 		cur.execute("UPDATE currenttemp SET temperature = %s, temperatureF = %s, timestamp = %s WHERE id = %s",
 			(tempc, tempf, timestamp, "1"))
