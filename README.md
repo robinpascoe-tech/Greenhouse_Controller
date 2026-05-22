@@ -240,6 +240,20 @@ the modern Python controller does not depend on them.
 Review and update credentials, paths, and PHP dependencies before using those
 files on a public or production system.
 
+## Known Limitations
+
+- Real-world greenhouse soak testing is still in progress. Treat the current
+  release as a release candidate until it has run through several days of live
+  weather and actuator behavior.
+- Sensor IDs, GPIO pins, relay behavior, motor timing, and SQL schedules are
+  installation-specific and must be reviewed before use on different hardware.
+- The simulation harness verifies controller logic, but it cannot prove relay
+  wiring, actuator direction, mechanical limits, or thermal behavior in a real
+  greenhouse.
+- The legacy dashboard is included for reference and has not yet been modernized
+  to the same standard as the Python controller.
+- Wiring diagrams and deployment examples are planned but not included yet.
+
 ## Contributing
 
 Contributions, ideas, and adaptations are welcome.
@@ -274,9 +288,9 @@ possible.
 
 ## Project Status
 
-This project is actively being cleaned up for public release. It began as a
-real greenhouse controller and still contains some legacy material alongside the
-newer refactored Python scripts.
+This project is being prepared as a `v0.9.0` release candidate for public use
+and review. It began as a real greenhouse controller and still contains some
+legacy material alongside the newer refactored Python scripts.
 
 Expect to review configuration, GPIO assignments, sensor IDs, and SQL passwords
 before using it in your own greenhouse.
