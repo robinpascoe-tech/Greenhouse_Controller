@@ -101,6 +101,7 @@ config/
 docs/
   INSTALL.md                 Installation guide.
   ENGINEERING_OVERVIEW.md    System architecture and behavior notes.
+  SOAK_TEST_PROTOCOL.md      Field soak-test collection and analysis guide.
 
 html/
   Legacy PHP dashboard files.
@@ -166,6 +167,7 @@ Then follow the full guide:
 
 - [Installation Guide](docs/INSTALL.md)
 - [Engineering Overview](docs/ENGINEERING_OVERVIEW.md)
+- [Soak Test Protocol](docs/SOAK_TEST_PROTOCOL.md)
 
 ## Configuration
 
