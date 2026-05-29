@@ -341,3 +341,30 @@ Inspect GPIO state without changing outputs:
 ```bash
 python3 tools/gpio_monitor.py
 ```
+
+## 12. Legacy PHP Dashboard Credentials
+
+The files in `html/` are the legacy PHP dashboard. The tracked
+`html/dbconnect.php` file intentionally does not contain a real password.
+
+On a live Pi, create `/var/www/html/dbconnect.local.php` after copying the
+dashboard files:
+
+```php
+<?php
+$db_host = 'localhost';
+$db_user = 'greenhouse_app';
+$db_password = 'your_database_password';
+$db_name = 'greenhouse';
+?>
+```
+
+Then secure it:
+
+```bash
+sudo chown www-data:www-data /var/www/html/dbconnect.local.php
+sudo chmod 640 /var/www/html/dbconnect.local.php
+```
+
+`dbconnect.local.php` is ignored by Git so future repository updates do not
+publish or overwrite live database credentials.
