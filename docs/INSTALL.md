@@ -368,3 +368,14 @@ sudo chmod 640 /var/www/html/dbconnect.local.php
 
 `dbconnect.local.php` is ignored by Git so future repository updates do not
 publish or overwrite live database credentials.
+
+After `dbconnect.local.php` exists, deploy dashboard updates with:
+
+```bash
+cd /home/pi/Greenhouse_Controller
+tools/deploy_dashboard.sh
+```
+
+The deploy script backs up the current web root, copies `html/` to
+`/var/www/html`, restores `dbconnect.local.php`, fixes ownership, and checks the
+main dashboard endpoints.

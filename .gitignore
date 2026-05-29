@@ -12,6 +12,7 @@ html/dbconnect.local.php
 *.log.*
 *.bundle
 soak_artifacts/
+dashboard_deploy_backups/
 
 .DS_Store
 Thumbs.db
