@@ -45,20 +45,25 @@ fi
 
 echo "Backing up current dashboard to $BACKUP_FILE"
 mkdir -p "$BACKUP_DIR"
-sudo tar -czf "$BACKUP_FILE" -C "$WEB_ROOT" .
+sudo tar \
+  --exclude='./cacti' \
+  --exclude='./phpmyadmin' \
+  -czf "$BACKUP_FILE" \
+  -C "$WEB_ROOT" .
 
 TMP_CONFIG="$(sudo mktemp)"
 sudo cp "$LOCAL_CONFIG" "$TMP_CONFIG"
 
 echo "Copying dashboard files from $SOURCE_DIR to $WEB_ROOT"
-sudo rsync -a --delete \
+sudo rsync -a \
   --exclude 'dbconnect.local.php' \
+  --chown "$WEB_USER:$WEB_GROUP" \
   "$SOURCE_DIR"/ "$WEB_ROOT"/
 
 sudo cp "$TMP_CONFIG" "$LOCAL_CONFIG"
 sudo rm -f "$TMP_CONFIG"
 
-sudo chown -R "$WEB_USER:$WEB_GROUP" "$WEB_ROOT"
+sudo chown "$WEB_USER:$WEB_GROUP" "$LOCAL_CONFIG"
 sudo chmod 640 "$LOCAL_CONFIG"
 
 echo "Checking PHP syntax"
