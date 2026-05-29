@@ -7,15 +7,17 @@ candidate.
 
 ## Recommended Test Order
 
-Run the first real greenhouse soak test from `main` at the `v0.9.0` tag. This
-keeps the first field test focused on the stable release candidate.
+Run the current real greenhouse soak test from `main` at the `v0.9.1` tag. This
+keeps the field test focused on the stable release-candidate baseline while
+including the timestamp, override, dashboard, and default-schedule fixes made
+after the initial `v0.9.0` pass.
 
 After the baseline is understood, run a separate soak test from `develop` to
 evaluate newer behavior such as outside-temperature-aware cooling.
 
 Suggested sequence:
 
-1. Soak test `main` / `v0.9.0` for several days.
+1. Soak test `main` / `v0.9.1` for several days.
 2. Analyze logs, SQL history, and field notes.
 3. Fix any release-candidate issues or promote a stable release.
 4. Soak test `develop` as the next smarter-controller candidate.
@@ -46,13 +48,13 @@ git rev-parse HEAD
 git describe --tags --always
 ```
 
-For a `v0.9.0` baseline soak:
+For a `v0.9.1` baseline soak:
 
 ```bash
 git fetch --all --tags
 git switch main
 git pull --ff-only
-git checkout v0.9.0
+git checkout v0.9.1
 ```
 
 Check service status and recent logs:
@@ -71,13 +73,14 @@ python3 -m py_compile scripts/*.py tools/*.py
 Optional bench checks before connecting to the greenhouse:
 
 ```bash
-export GREENHOUSE_ALLOW_REAL_GPIO_TEST=1
 export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
-python3 tools/gpio_integration_test.py
+python3 tools/simulation_harness.py
 ```
 
-Only run the GPIO integration test when it is safe for the configured GPIO pins
-to energize.
+The simulation harness records GPIO calls instead of moving real relays. On the
+development branch, a guarded real-GPIO integration test may also be available;
+only run hardware-driving tests when it is safe for the configured GPIO pins to
+energize.
 
 ## During The Test
 
@@ -250,7 +253,7 @@ For `develop` soak tests, also review adaptive cooling:
 - urgent overheating: fans and windows both used
 - stale outside temperature: fallback to legacy cooling
 
-This does not apply to the `v0.9.0` baseline unless the adaptive cooling work
+This does not apply to the `v0.9.1` baseline unless the adaptive cooling work
 has been merged into the tested branch.
 
 ## Warning Signs

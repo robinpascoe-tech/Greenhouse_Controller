@@ -233,6 +233,16 @@ The harness covers scenarios such as:
 - DS18B20 sentinel values
 - alert cooldown behavior
 
+## Current Release Candidate
+
+`v0.9.1` is the current release candidate for real greenhouse soak testing. It
+builds on `v0.9.0` with UTC timestamp consistency, clearer tri-state manual
+override semantics, and safer default temperature schedules.
+
+The recommended next step is a multi-day live soak test from `main` at the
+`v0.9.1` tag, followed by log/database analysis before promoting toward
+`v1.0.0`.
+
 ## Legacy Dashboard
 
 The `html/` directory contains legacy PHP dashboard files from the original
@@ -290,9 +300,9 @@ possible.
 
 ## Project Status
 
-This project is being prepared as a `v0.9.0` release candidate for public use
-and review. It began as a real greenhouse controller and still contains some
-legacy material alongside the newer refactored Python scripts.
+This project is being prepared for public use and review. It began as a real
+greenhouse controller and still contains some legacy material alongside the
+newer refactored Python scripts.
 
 Expect to review configuration, GPIO assignments, sensor IDs, and SQL passwords
 before using it in your own greenhouse.

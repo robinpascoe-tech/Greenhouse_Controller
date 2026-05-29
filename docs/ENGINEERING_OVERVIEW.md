@@ -42,6 +42,7 @@ config/
 docs/
   INSTALL.md
   ENGINEERING_OVERVIEW.md
+  SOAK_TEST_PROTOCOL.md
 
 html/
   Legacy PHP dashboard files.
@@ -87,7 +88,7 @@ greenhouse operating periods.
 : Time-of-day temperature schedule. Each row includes high/low thresholds,
   hysteresis ranges, window thresholds, and circulation fan state.
   Fresh installs use conservative plant-protection defaults based on the
-  v0.9.0 soak-test schedule: `lowtemp` defaults to `6 C`, daytime ventilation
+  v0.9.1 soak-test schedule: `lowtemp` defaults to `6 C`, daytime ventilation
   starts around `35 C`, and daytime window cooling starts around `28 C`.
 
 `overrides`

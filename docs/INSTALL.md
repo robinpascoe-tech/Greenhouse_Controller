@@ -63,6 +63,13 @@ cd /home/pi/Greenhouse_Controller
 
 Repository: [robinpascoe-tech/Greenhouse_Controller](https://github.com/robinpascoe-tech/Greenhouse_Controller)
 
+For release-candidate greenhouse testing, check out the current stable tag:
+
+```bash
+git fetch --all --tags
+git checkout v0.9.1
+```
+
 If you use a different path, update:
 
 - `config/greenhouse-controller.service.example`
@@ -264,6 +271,12 @@ Sensor reading should run frequently, for example every minute:
 
 ```cron
 * * * * * /usr/bin/python3 /home/pi/Greenhouse_Controller/scripts/read_sensors.py
+```
+
+For fresher readings, a second offset run can be added:
+
+```cron
+* * * * * sleep 30; /usr/bin/python3 /home/pi/Greenhouse_Controller/scripts/read_sensors.py
 ```
 
 Sensor health can run less often:
