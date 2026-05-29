@@ -144,6 +144,9 @@ turn off when current_temp >= lowtemp + (lowtemprange / 2)
 
 Short-cycle protection enforces minimum on/off durations before state changes.
 
+Fresh installs default `lowtemp` to `6 C`, which is intended as a safer
+plant-protection baseline than the older empty-greenhouse test value of `2 C`.
+
 ### Ventilation Fans
 
 Ventilation fans use high-temperature hysteresis:
