@@ -66,6 +66,17 @@ archive/
    health snapshots to `sensor_health`, stores smoothing state in
    `sensor_state`, and records alerts in `sensor_alerts`.
 
+## Time Handling
+
+Database and application log timestamps are written in UTC. MariaDB sessions
+opened by the Python scripts set `time_zone` to `+00:00`, and Python-written
+`DATETIME` values are stored as naive UTC because MySQL/MariaDB `DATETIME`
+columns do not retain timezone metadata.
+
+The daily schedule in `settings` is the exception: schedule selection uses the
+Raspberry Pi's local wall-clock time because those rows describe local
+greenhouse operating periods.
+
 ## Database Tables
 
 `currenttemp`

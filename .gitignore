@@ -9,6 +9,7 @@ env/
 greenhouse.conf
 *.log
 *.bundle
+soak_artifacts/
 
 .DS_Store
 Thumbs.db

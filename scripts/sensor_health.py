@@ -74,6 +74,17 @@ def as_utc(value):
     return value.astimezone(timezone.utc)
 
 
+def utc_now():
+    """
+    Return naive UTC for MySQL DATETIME columns.
+
+    Stored DATETIME values are UTC without timezone metadata; use as_utc() when
+    converting DB values back into timezone-aware Python datetimes.
+    """
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def db():
     """Create lightweight cron-safe MySQL connection."""
     return pymysql.connect(
@@ -83,7 +94,8 @@ def db():
         database=DB_NAME,
         cursorclass=pymysql.cursors.Cursor,
         connect_timeout=5,
-        autocommit=True
+        autocommit=True,
+        init_command="SET time_zone = '+00:00'",
     )
 
 
@@ -157,7 +169,7 @@ def fetch(cur, sensor, hours):
     """
     Retrieve sensor diagnostics within a rolling time window.
     """
-    start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+    start_time = utc_now() - timedelta(hours=hours)
 
     cur.execute("""
         SELECT raw_values, crc_failures, notes
@@ -369,7 +381,7 @@ Time: {datetime.now(timezone.utc)}
         INSERT INTO sensor_alerts
         (sensor_name, timestamp, alert_type, message)
         VALUES (%s,%s,%s,%s)
-    """, (sensor, datetime.now(timezone.utc), status, body.strip()))
+    """, (sensor, utc_now(), status, body.strip()))
 
 
 # ============================================================
@@ -494,8 +506,8 @@ def update_state(cur, sensor, score_value, status):
         cur.execute("""
             INSERT INTO sensor_state
             (sensor_name, last_status, last_health, ema_health, last_change_time)
-            VALUES (%s,%s,%s,%s,NOW())
-        """, (sensor, status, score_value, score_value))
+            VALUES (%s,%s,%s,%s,%s)
+        """, (sensor, status, score_value, score_value, utc_now()))
         return
 
     last_status, ema = row
@@ -513,9 +525,9 @@ def update_state(cur, sensor, score_value, status):
             SET last_status=%s,
                 last_health=%s,
                 ema_health=%s,
-                last_change_time=NOW()
+                last_change_time=%s
             WHERE sensor_name=%s
-        """, (status, score_value, ema, sensor))
+        """, (status, score_value, ema, utc_now(), sensor))
     else:
         cur.execute("""
             UPDATE sensor_state
@@ -539,7 +551,7 @@ def main():
     cur.execute("SELECT DISTINCT sensor_name FROM sensor_diagnostics")
     sensors = [r[0] for r in cur.fetchall()]
 
-    now = datetime.now(timezone.utc)
+    now = utc_now()
 
     for sensor in sensors:
 

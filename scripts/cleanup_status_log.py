@@ -7,7 +7,7 @@ Typical cron entry:
 """
 
 import configparser
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 import pymysql as mdb
 
@@ -46,7 +46,9 @@ except KeyError:
 
 def cleanup_old_logs():
     """Delete status_log rows older than RETENTION_DAYS."""
-    cutoff = datetime.now() - timedelta(days=RETENTION_DAYS)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        days=RETENTION_DAYS
+    )
 
     print(f"Deleting records older than: {cutoff}")
 
@@ -57,6 +59,7 @@ def cleanup_old_logs():
         database=DB_NAME,
         connect_timeout=5,
         autocommit=False,
+        init_command="SET time_zone = '+00:00'",
     )
 
     try:

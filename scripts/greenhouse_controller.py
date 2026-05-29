@@ -84,7 +84,13 @@ LOG_FILENAME = "/home/pi/Greenhouse_Controller/thermostat.log"
 logger = logging.getLogger("GreenhouseController")
 logger.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
+class UTCFormatter(logging.Formatter):
+    """Format log timestamps in UTC to match database timestamps."""
+
+    converter = time.gmtime
+
+
+formatter = UTCFormatter("%(asctime)sZ %(levelname)-8s %(message)s")
 
 # Also log warnings/errors to stderr for journalctl/systemd visibility.
 stream_handler = logging.StreamHandler()
@@ -255,6 +261,17 @@ def coerce_time(value):
     return datetime.strptime(str(value), "%H:%M:%S").time()
 
 
+def utc_now():
+    """
+    Return naive UTC for MySQL DATETIME columns.
+
+    The project stores DB timestamps in UTC. MySQL DATETIME does not preserve
+    timezone metadata, so values are written as naive UTC and parsed back as UTC.
+    """
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 # ================================================================
 # DATABASE HELPERS
 # ================================================================
@@ -296,6 +313,7 @@ def get_db_connection():
         database=DB_NAME,
         connect_timeout=5,
         autocommit=False,
+        init_command="SET time_zone = '+00:00'",
     )
 
 
@@ -399,14 +417,15 @@ def log_status_if_changed():
             cur.execute(
                 """
                 INSERT INTO status_log
-                (heater, fan, circfan, window)
-                VALUES (%s, %s, %s, %s)
+                (heater, fan, circfan, window, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
                     current["heater"],
                     current["fan"],
                     current["circfan"],
                     current["window"],
+                    utc_now(),
                 ),
             )
 

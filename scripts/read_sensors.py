@@ -30,7 +30,13 @@ LOG_FILE = "/home/pi/Greenhouse_Controller/greenhouse_sensors.log"
 logger = logging.getLogger("greenhouse")
 logger.setLevel(logging.INFO)
 
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+class UTCFormatter(logging.Formatter):
+    """Format log timestamps in UTC to match database timestamps."""
+
+    converter = time.gmtime
+
+
+formatter = UTCFormatter("%(asctime)sZ [%(levelname)s] %(message)s")
 
 stream_handler = logging.StreamHandler()
 stream_handler.setLevel(logging.WARNING)
@@ -79,6 +85,17 @@ def d(x):
 def to_f(c):
     """Convert Celsius Decimal values to Fahrenheit Decimal values."""
     return d((c * 9 / 5) + 32)
+
+
+def utc_now():
+    """
+    Return naive UTC for MySQL DATETIME columns.
+
+    MariaDB DATETIME values do not retain timezone metadata, so the project
+    writes UTC without tzinfo and treats naive DB timestamps as UTC on read.
+    """
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============================================================
@@ -206,7 +223,8 @@ def db_connect():
         database=DB_NAME,
         cursorclass=pymysql.cursors.Cursor,
         connect_timeout=5,
-        autocommit=False
+        autocommit=False,
+        init_command="SET time_zone = '+00:00'",
     )
 
 
@@ -267,7 +285,7 @@ def main():
         results = {}
 
         # IMPORTANT: timestamp must be defined BEFORE loop (fixes previous bug)
-        timestamp = datetime.now(timezone.utc)
+        timestamp = utc_now()
 
         # =====================================================
         # SENSOR ACQUISITION LOOP
