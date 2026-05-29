@@ -28,7 +28,7 @@ body {
 <form action="overrideform2.php" method="post" name="override">
 	Window Override<br><select name="windowstatus">
 	<option selected="" value="1">Open</option>
-	<option value="0">Close</option>
+	<option value="-1">Close</option>
 	</select> for <select name="windowoverridetime">
 	<option></option>
 	<option value="30">0.5</option>
@@ -48,7 +48,7 @@ body {
 	</select> Hours<br><br>
 	Fan Override<br><select name="fanstatus">
 	<option selected="" value="1">On</option>
-	<option value="0">Off</option>
+	<option value="-1">Off</option>
 	</select> for <select name="fanoverridetime">
 	<option></option>
 	<option value="30">0.5</option>

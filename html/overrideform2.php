@@ -10,12 +10,12 @@ $fanstatus=$_POST['fanstatus'];
 $isformerror = 0;
 $formerror = "";
 
-if ($windowstatus ==0) {
+if ($windowstatus == -1) {
 		$windowstatusname='Closed';
 } else if ($windowstatus==1) {
 		$windowstatusname='Open';
 }
-if ($fanstatus ==0) {
+if ($fanstatus == -1) {
 		$fanstatusname='Off';
 } else if ($fanstatus ==1) {
 		$fanstatusname='On';
@@ -50,7 +50,7 @@ $newfan_time=$nowfanutc->format('Y-m-d H:i:s');
 $nowfan2utc=$nowfanutc;
 $nowfan2utc->setTimeZone(new DateTimeZone($user_tz));
 
-$data = "UPDATE `overrides` SET fanoverride='$windowstatus', fanexpire='$newfan_time' WHERE ID='1'"; 
+$data = "UPDATE `overrides` SET fanoverride='$fanstatus', fanexpire='$newfan_time' WHERE ID='1'";
   $query = mysqli_query($connection, $data) or die("Couldn't execute query. ". mysql_error()); 
 }
 

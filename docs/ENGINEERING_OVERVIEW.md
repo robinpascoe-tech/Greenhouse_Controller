@@ -154,7 +154,7 @@ turn off when current_temp <= hightemp - (hightemprange / 2)
 ```
 
 The controller starts the main fan, waits briefly, then starts the auxiliary
-fan. Overrides can force the fans on until the override expiration time.
+fan. Overrides can force the fans on or off until the override expiration time.
 
 ### Circulation Fan
 
@@ -169,6 +169,18 @@ window state in SQL to avoid repeatedly issuing open/close sequences.
 Window movement includes relay timing for the rear window and roof window. A
 direction reversal lockout protects motors and relays from rapid open/close
 direction changes.
+
+Window and fan overrides are tri-state:
+
+```text
+ 1 = force on/open until expiration
+ 0 = automatic control / no active override
+-1 = force off/closed until expiration
+```
+
+Canceling an override sets the value back to automatic control. It does not
+mean "force the opposite direction"; use a close/off override when an immediate
+manual close/off action is intended.
 
 ## Short-Cycle Protection
 

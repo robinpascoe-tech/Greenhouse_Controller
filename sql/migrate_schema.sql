@@ -210,6 +210,11 @@ ALTER TABLE `overrides`
   DEFAULT CHARSET=utf8mb4,
   COLLATE=utf8mb4_unicode_ci;
 
+-- Override values are tri-state:
+--   1 = force on/open until expiration
+--   0 = automatic control / no active override
+--  -1 = force off/closed until expiration
+
 INSERT INTO `overrides` (`id`, `windowoverride`, `windowexpire`, `fanoverride`, `fanexpire`) VALUES
   (1, 0, '2010-01-01 00:00:00', 0, '2010-01-01 00:00:00')
 ON DUPLICATE KEY UPDATE

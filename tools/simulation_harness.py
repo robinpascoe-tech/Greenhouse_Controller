@@ -441,10 +441,42 @@ def test_overrides(thermostat, clock):
     thermostat.window_control(
         Decimal("10"), Decimal("25"), Decimal("2"), overrides["window"]
     )
+
+    fan_state_after_force_on = thermostat.ACTUATOR_STATE["fan"]["state"]
+    window_db_state_after_force_open = scalar("SELECT window FROM status WHERE id=1")
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE overrides
+                SET fanoverride=-1, fanexpire=%s,
+                    windowoverride=-1, windowexpire=%s
+                WHERE id=1
+                """,
+                (future, future),
+            )
+    finally:
+        con.close()
+
+    forced_off_overrides = thermostat.get_override_settings()
+    thermostat.ventilation_control(
+        Decimal("40"), Decimal("25"), Decimal("2"), forced_off_overrides["fan"]
+    )
+    thermostat.window_control(
+        Decimal("40"), Decimal("25"), Decimal("2"), forced_off_overrides["window"]
+    )
+
     return {
         "overrides": overrides,
-        "fan_state": thermostat.ACTUATOR_STATE["fan"]["state"],
-        "window_db_state": scalar("SELECT window FROM status WHERE id=1"),
+        "fan_state_after_force_on": fan_state_after_force_on,
+        "window_db_state_after_force_open": window_db_state_after_force_open,
+        "forced_off_overrides": forced_off_overrides,
+        "fan_state_after_force_off": thermostat.ACTUATOR_STATE["fan"]["state"],
+        "window_db_state_after_force_close": scalar(
+            "SELECT window FROM status WHERE id=1"
+        ),
     }
 
 

@@ -151,6 +151,10 @@ ON DUPLICATE KEY UPDATE
 --
 -- Manual fan/window overrides. A row with id=1 is treated as the singleton
 -- control row by greenhouse_controller.py.
+-- Override values are tri-state:
+--   1 = force on/open until expiration
+--   0 = automatic control / no active override
+--  -1 = force off/closed until expiration
 --
 
 CREATE TABLE IF NOT EXISTS `overrides` (
