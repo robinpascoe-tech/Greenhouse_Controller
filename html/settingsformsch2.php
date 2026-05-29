@@ -145,7 +145,7 @@ if ($sch1starttime < $sch1endtime && $sch1endtime < $sch2starttime && $sch2start
 		$isformerror=1;
 }
 
-if ($diff1 <= 1 && $diff2 <= 1 && diff3 <= 1) {
+if ($diff1 <= 1 && $diff2 <= 1 && $diff3 <= 1) {
 	//no gaps in schedule.
 } else {
 		$formerror="There is a gap in the schedule end and start times.";

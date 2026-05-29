@@ -75,7 +75,99 @@ Possible workflow:
 This would make the project much easier for other people to install on their
 own hardware.
 
-## 4. Expanded Alerting
+## 4. DS18B20 Qualification And Calibration
+
+Create a script and bench-test protocol for screening inexpensive DS18B20
+sensors before they are installed in hard-to-reach greenhouse locations.
+
+Motivation:
+
+- DS18B20 sensors are inexpensive in bulk, but batches can include defective,
+  poorly calibrated, noisy, slow, or intermittently failing sensors.
+- Temperature sensors are central to safe greenhouse control, so bad sensors
+  should be found before installation.
+- Replacing installed sensors can be time consuming, especially once wiring is
+  routed, sealed, or mounted in plant areas.
+
+Proposed tool:
+
+```bash
+python3 tools/qualify_ds18b20_sensors.py
+```
+
+Possible workflow:
+
+1. Connect several DS18B20 sensors to the Raspberry Pi on the same 1-Wire bus.
+2. Sample every 30-60 seconds for 12-24 hours at stable ambient temperature.
+3. Store raw readings by sensor ID in a CSV or SQL qualification table.
+4. Compare each sensor against the group median at each timestamp.
+5. Flag sensors with persistent offset, excessive noise, dropouts, CRC/read
+   failures, unrealistic jumps, or slow response.
+6. Rank sensors so the best units can be selected for the most important
+   greenhouse locations.
+7. Optionally generate a calibration report with recommended offset values.
+
+Recommended batch size:
+
+- Minimum useful batch: 5 sensors. This is enough to spot obvious outliers by
+  comparing each sensor to the group median.
+- Better practical batch: 8-12 sensors. This gives a stronger majority signal,
+  makes one or two bad sensors easier to identify, and is still manageable on a
+  breadboard or temporary wiring harness.
+- Best confidence: 15 or more sensors, especially when qualifying a large bulk
+  purchase. At that point, the median and interquartile spread become more
+  trustworthy, but wiring and labeling discipline matter more.
+
+A practical target for this project is 8-12 sensors per qualification run. If
+only 5 sensors are tested, use the results mainly to reject clear failures, not
+to create high-confidence calibration offsets.
+
+Extended calibration protocol:
+
+1. Place all waterproof sensor tips in a stirred ice-water bath and allow them
+   to stabilize.
+2. Record stabilized readings long enough to calculate median, noise, and
+   sensor-to-sensor spread.
+3. Move sensors to ambient air or a stirred room-temperature water bath and
+   allow them to stabilize again.
+4. Optionally place sensors in a boiling-water bath and allow them to stabilize,
+   adjusting the expected boiling point for altitude and local pressure if using
+   it as an absolute reference.
+5. Compare each sensor's readings against the group median at each plateau.
+6. For sensors that track the group consistently with a nearly constant offset,
+   calculate a simple offset correction.
+7. For sensors whose error changes significantly across the temperature range,
+   mark them as lower quality or consider a two-point linear correction only if
+   the added complexity is justified.
+
+Design notes:
+
+- The group median is a good implied reference when most sensors agree, but it
+  is not a true calibration standard.
+- A known-good reference thermometer would make the protocol much stronger,
+  especially at ice-water and ambient points.
+- Stirred water baths are better than still air for comparing sensors because
+  all probes experience nearly the same temperature.
+- Boiling-water testing may be unnecessary for greenhouse use because the
+  normal operating range is far lower; ice-water and ambient/greenhouse-range
+  testing may be more relevant.
+- Qualification should consider stability and failure behavior, not only static
+  offset. A slightly offset but stable sensor can be corrected; a noisy or
+  intermittent sensor should be rejected.
+
+Possible report fields:
+
+- sensor ID
+- sample count
+- missing/read-failure count
+- median offset from group median
+- maximum absolute deviation
+- standard deviation or median absolute deviation
+- response lag during temperature transitions
+- recommended use: primary, secondary, noncritical, reject
+- recommended calibration offset, if appropriate
+
+## 5. Expanded Alerting
 
 Add more operational alerts, especially alerts based on trends rather than only
 absolute thresholds.
@@ -95,7 +187,7 @@ Useful alert types:
 Alerts should keep cooldowns and severity levels so they remain useful instead
 of noisy.
 
-## 5. Forecast-Aware Control
+## 6. Forecast-Aware Control
 
 Use an online weather forecast to make earlier, more efficient control decisions.
 
@@ -112,7 +204,7 @@ Possible behaviors:
 Forecast-aware control should fail gracefully when the internet, API, or
 forecast data is unavailable.
 
-## 6. Dashboard Modernization
+## 7. Dashboard Modernization
 
 Replace or supplement the legacy PHP dashboard with a modern interface.
 
@@ -131,7 +223,7 @@ High-value dashboard views:
 Dashboard work should follow the controller state model rather than duplicating
 control logic.
 
-## 7. Simulation And Test Expansion
+## 8. Simulation And Test Expansion
 
 Keep growing the simulation harness as smarter behavior is added.
 
@@ -163,6 +255,7 @@ The simulation harness should remain the confidence engine for behavior changes.
 3. Expand simulation coverage for adaptive cooling and woodstove overheating.
 4. Move sensor ID mapping out of code and into config or SQL.
 5. Build an interactive sensor assignment tool.
-6. Add expanded trend-based alerting.
-7. Add forecast ingestion and forecast-aware decisions.
-8. Build a modern dashboard around the improved state model.
+6. Build a DS18B20 qualification and calibration tool.
+7. Add expanded trend-based alerting.
+8. Add forecast ingestion and forecast-aware decisions.
+9. Build a modern dashboard around the improved state model.
