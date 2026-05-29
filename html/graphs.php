@@ -34,6 +34,10 @@ background: url(images/<?php echo $selectedBg; ?>) no-repeat;
 		<td class="auto-style9" style="width: 199px"><br><a href="operationsgraphs.php"><img alt="Operations Graphs" height="100" src="images/operations.png" width="100"><br>Operations Graphs</a><br><br></td>
 	</tr>
 	<tr>
+		<td class="auto-style9" style="width: 199px"><br><a href="combinedopsgraphs.php"><img alt="Combined Graphs" height="100" src="images/operations.png" width="100"><br>Combined Graphs</a><br><br></td>
+		<td class="auto-style9" style="width: 199px">&nbsp;</td>
+	</tr>
+	<tr>
 		<td class="auto-style9" style="width: 199px"><br><a href="index.php"><img alt="Home" height="100" src="images/greenhousehome.png" width="100"><br>Home</a><br><br></td>
 		<td class="auto-style9" style="width: 199px"><br><a href="/cacti/graph_view.php"><img alt="Temp Graphs" height="100" src="images/chart01.png" width="100"><br>More Graphs</a><br><br></td>
 	</tr>
