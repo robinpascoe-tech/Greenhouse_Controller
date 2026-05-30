@@ -222,6 +222,20 @@ temperatures. It looks for:
 - DS18B20 sentinel values such as `85.0 C` and `-127.0 C`
 - total sensor failure rows
 
+Inside-air sensors are compared as a peer group, so future layouts can add
+more independent sensors such as middle or side probes by setting
+`sensor_profile.sensor_type` to `indoor`. Derived or special sensors such as
+`AverageInsideTemp`, `PiTemp`, and `WoodstoveTemp` are not used as independent
+inside-air peers.
+
+Normal greenhouse temperature movement is treated as environmental context
+rather than automatic sensor degradation. This matters during sunny front-end
+heating, back-window intake cooling, door openings, and other real greenhouse
+events where sensors can move at different rates while still behaving
+correctly. A peer outlier penalty requires at least three comparable inside-air
+sensors, so a two-sensor Front/Back disagreement is noted cautiously instead
+of being treated as proof that one sensor is bad.
+
 Health statuses include:
 
 - `HEALTHY`

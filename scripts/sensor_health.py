@@ -35,6 +35,24 @@ ALERT_COOLDOWN_HOURS = 6
 
 DS18B20_SENTINEL_VALUES = {-127.0, 85.0}
 
+INDOOR_SENSOR_GROUP = "inside_air"
+OUTDOOR_SENSOR_GROUP = "outside_air"
+DERIVED_SENSOR_GROUP = "derived"
+SPECIAL_SENSOR_GROUP = "special"
+
+KNOWN_SENSOR_GROUPS = {
+    "AverageInsideTemp": DERIVED_SENSOR_GROUP,
+    "OutsideTemp": OUTDOOR_SENSOR_GROUP,
+    "PiTemp": SPECIAL_SENSOR_GROUP,
+    "WoodstoveTemp": SPECIAL_SENSOR_GROUP,
+}
+
+ENVIRONMENTAL_SHORT_DRIFT_C = 0.8
+ENVIRONMENTAL_LONG_DRIFT_C = 1.2
+PEER_DIRECTION_EPSILON_C = 0.25
+PEER_OUTLIER_MIN_C = 3.0
+PEER_OUTLIER_MAD_MULTIPLIER = 4.0
+
 
 # ============================================================
 # DATABASE CONNECTION
@@ -149,6 +167,34 @@ def get_sensor_profile(cur, sensor):
     }
 
 
+def sensor_group(sensor, profile):
+    """
+    Return the comparison group for a sensor.
+
+    The grouping is deliberately role based rather than name-count based. A
+    larger greenhouse can add more `sensor_profile.sensor_type='indoor'`
+    sensors and they will join the same inside-air peer group automatically.
+    Known derived/special sensors are excluded from peer voting because they do
+    not represent independent greenhouse air measurements.
+    """
+
+    if sensor in KNOWN_SENSOR_GROUPS:
+        return KNOWN_SENSOR_GROUPS[sensor]
+
+    sensor_type = str(profile.get("sensor_type") or "").lower()
+
+    if sensor_type in {"indoor", "inside", "inside_air", "greenhouse"}:
+        return INDOOR_SENSOR_GROUP
+
+    if sensor_type in {"outdoor", "outside", "outside_air"}:
+        return OUTDOOR_SENSOR_GROUP
+
+    if sensor_type in {"derived", "computed", "average"}:
+        return DERIVED_SENSOR_GROUP
+
+    return SPECIAL_SENSOR_GROUP
+
+
 # ============================================================
 # TIME WINDOW DATA EXTRACTION
 # ============================================================
@@ -261,11 +307,16 @@ def features(cur, sensor):
     s6 = stats(v6) if v6 else s1
     s24 = stats(v24) if v24 else s1
 
+    drift_short_signed = s1["median"] - s6["median"]
+    drift_long_signed = s1["median"] - s24["median"]
+
     return {
         "median": s1["median"],
         "variance": s1["variance"],
-        "drift_short": abs(s1["median"] - s6["median"]),
-        "drift_long": abs(s1["median"] - s24["median"]),
+        "drift_short": abs(drift_short_signed),
+        "drift_long": abs(drift_long_signed),
+        "drift_short_signed": drift_short_signed,
+        "drift_long_signed": drift_long_signed,
         "sample_size": s1["count"],
         "instability_ratio": len(set(v1)) / max(1, len(v1)),
         "crc_rate": sum(crc) / max(1, len(crc)),
@@ -276,6 +327,107 @@ def features(cur, sensor):
         "sensor_failure": False,
         "flatline": len(w1) >= 3 and len(set(v1)) <= 1
     }
+
+
+def _same_direction(a, b):
+    """Return True when two temperature trends move meaningfully together."""
+
+    if abs(a) < PEER_DIRECTION_EPSILON_C or abs(b) < PEER_DIRECTION_EPSILON_C:
+        return False
+
+    return (a > 0 and b > 0) or (a < 0 and b < 0)
+
+
+def add_peer_context(sensor, profile, f, profiles, feature_map):
+    """
+    Add peer/environment context to a feature set.
+
+    Normal greenhouse ramps can be uneven: the sunny front may heat faster than
+    the back, and door/window events can cool one end first. Because of that,
+    a two-sensor inside group is treated as context, not proof. Outlier
+    penalties require at least three comparable independent sensors.
+    """
+
+    if not f or f.get("sensor_failure"):
+        return f
+
+    group = sensor_group(sensor, profile)
+    f["sensor_group"] = group
+
+    comparable_groups = {INDOOR_SENSOR_GROUP}
+    if group not in comparable_groups:
+        f["peer_group_size"] = 0
+        f["environmental_change"] = False
+        f["peer_outlier"] = False
+        return f
+
+    peers = []
+    for peer_name, peer_features in feature_map.items():
+        if not peer_features or peer_features.get("sensor_failure"):
+            continue
+
+        peer_profile = profiles.get(peer_name, {})
+        if sensor_group(peer_name, peer_profile) != group:
+            continue
+
+        if peer_features.get("median") is None:
+            continue
+
+        peers.append((peer_name, peer_features))
+
+    f["peer_group_size"] = len(peers)
+
+    if len(peers) < 2:
+        f["environmental_change"] = False
+        f["peer_outlier"] = False
+        return f
+
+    medians = [peer_f["median"] for _, peer_f in peers]
+    group_median = statistics.median(medians)
+    deviations = [abs(value - group_median) for value in medians]
+    group_mad = statistics.median(deviations) if deviations else 0
+    peer_delta = abs(f["median"] - group_median)
+
+    short_trends = [peer_f.get("drift_short_signed", 0) for _, peer_f in peers]
+    long_trends = [peer_f.get("drift_long_signed", 0) for _, peer_f in peers]
+
+    same_short = sum(
+        1 for trend in short_trends if _same_direction(f["drift_short_signed"], trend)
+    )
+    same_long = sum(
+        1 for trend in long_trends if _same_direction(f["drift_long_signed"], trend)
+    )
+
+    group_short_drift = statistics.median(abs(trend) for trend in short_trends)
+    group_long_drift = statistics.median(abs(trend) for trend in long_trends)
+
+    environmental_change = (
+        group_short_drift >= ENVIRONMENTAL_SHORT_DRIFT_C
+        or group_long_drift >= ENVIRONMENTAL_LONG_DRIFT_C
+        or same_short >= 2
+        or same_long >= 2
+    )
+
+    peer_outlier = False
+    if len(peers) >= 3:
+        outlier_threshold = max(
+            PEER_OUTLIER_MIN_C,
+            group_mad * PEER_OUTLIER_MAD_MULTIPLIER,
+            float(profile.get("normal_variance") or 1.0) * 2.0,
+        )
+        peer_outlier = peer_delta > outlier_threshold
+
+    f.update({
+        "environmental_change": environmental_change,
+        "peer_outlier": peer_outlier,
+        "peer_delta": peer_delta,
+        "peer_group_median": group_median,
+        "peer_group_mad": group_mad,
+        "peer_group_short_drift": group_short_drift,
+        "peer_group_long_drift": group_long_drift,
+    })
+
+    return f
 
 
 # ============================================================
@@ -400,19 +552,38 @@ def score(f, ema, profile):
     if ema is not None:
         score = (score * 0.7) + (float(ema) * 0.3)
 
-    # Variance check (profile-aware)
-    if f["variance"] > profile["normal_variance"] * profile["noise_tolerance"]:
-        score -= 20
-        notes.append("high noise")
+    environmental_change = f.get("environmental_change", False)
+    peer_outlier = f.get("peer_outlier", False)
 
-    # Drift checks (profile-aware)
+    if peer_outlier:
+        score -= 35
+        notes.append("peer outlier")
+
+    # Variance check (profile-aware). High variance during a broad greenhouse
+    # ramp is usually weather/actuator behavior, not sensor degradation.
+    if f["variance"] > profile["normal_variance"] * profile["noise_tolerance"]:
+        if environmental_change and not peer_outlier:
+            notes.append("environmental variance")
+        else:
+            score -= 20
+            notes.append("high noise")
+
+    # Drift checks (profile-aware). Temperature drift alone is not a sensor
+    # fault in a greenhouse; it becomes suspicious only without environmental
+    # peer context or other failure signals.
     if f["drift_short"] > 0.8 * profile["drift_sensitivity"]:
-        score -= 15
-        notes.append("short drift")
+        if environmental_change and not peer_outlier:
+            notes.append("environmental short trend")
+        else:
+            score -= 5
+            notes.append("short temperature trend")
 
     if f["drift_long"] > 1.2 * profile["drift_sensitivity"]:
-        score -= 20
-        notes.append("long drift")
+        if environmental_change and not peer_outlier:
+            notes.append("environmental long trend")
+        else:
+            score -= 5
+            notes.append("long temperature trend")
 
     # Range validation only applies when sensor_profile defines expected bounds.
     if profile["expected_min"] is not None and f["median"] < profile["expected_min"]:
@@ -541,10 +712,22 @@ def main():
 
     now = datetime.now(timezone.utc)
 
+    profiles = {sensor: get_sensor_profile(cur, sensor) for sensor in sensors}
+    feature_map = {sensor: features(cur, sensor) for sensor in sensors}
+
+    for sensor in sensors:
+        feature_map[sensor] = add_peer_context(
+            sensor,
+            profiles[sensor],
+            feature_map[sensor],
+            profiles,
+            feature_map,
+        )
+
     for sensor in sensors:
 
-        profile = get_sensor_profile(cur, sensor)
-        f = features(cur, sensor)
+        profile = profiles[sensor]
+        f = feature_map[sensor]
 
         cur.execute("""
             SELECT last_status, ema_health
