@@ -122,8 +122,8 @@ archive/
   attempt to `sensor_diagnostics`.
 
 `scripts/sensor_health.py`
-: Analyzes diagnostic history for CRC instability, flatlines, sentinel values,
-  noise, drift, degradation, and failure.
+: Analyzes diagnostic history for current and persistent CRC instability,
+  flatlines, sentinel values, noise, drift, degradation, and failure.
 
 `scripts/cleanup_status_log.py`
 : Deletes old actuator history rows to keep the database from growing forever.
@@ -235,6 +235,7 @@ The harness covers scenarios such as:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health persistent CRC instability
 
 For Raspberry Pi GPIO integration testing, use the guarded hardware test. It
 drives the configured GPIO outputs, samples pin state with `pinctrl`, uses a

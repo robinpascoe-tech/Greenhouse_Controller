@@ -142,6 +142,8 @@ Schema changes must be reflected in:
 - Keep changes focused and commit coherent checkpoints.
 - Prefer existing project patterns over new abstractions.
 - For safety-critical changes, update simulation coverage and docs.
+- For sensor-health changes, preserve both temperature plausibility checks and
+  reliability checks such as persistent CRC instability.
 - Do not rewrite Git history or force-push unless explicitly requested.
 - Do not revert user changes without explicit approval.
 - Keep `main` stable; do active work on `develop` unless told otherwise.

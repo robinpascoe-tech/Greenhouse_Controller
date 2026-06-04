@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Sensor Health Engine v3.3.1 (Stabilization Patch)
+Sensor Health Engine v3.3.1 (Stabilization + Peer/CRC Context)
 
 This version focuses on:
 - Fixing regressions introduced in v3.3
 - Restoring operational alerting
 - Preventing status oscillation (hysteresis)
 - Unifying decision logic with sensor profiles
+- Tracking persistent CRC instability separately from temperature plausibility
 - Improving maintainability and debugging clarity
 
 This is intended to run as a cron-based process on a Raspberry Pi.
@@ -52,6 +53,9 @@ ENVIRONMENTAL_LONG_DRIFT_C = 1.2
 PEER_DIRECTION_EPSILON_C = 0.25
 PEER_OUTLIER_MIN_C = 3.0
 PEER_OUTLIER_MAD_MULTIPLIER = 4.0
+
+CRC_PERSISTENT_WARNING_RATE = 0.05
+CRC_PERSISTENT_SEVERE_RATE = 0.15
 
 
 # ============================================================
@@ -272,8 +276,8 @@ def features(cur, sensor):
     w24 = fetch(cur, sensor, 24)
 
     v1, crc, failures, invalid_readings = parse(w1)
-    v6, _, _, _ = parse(w6)
-    v24, _, _, _ = parse(w24)
+    v6, crc6, _, _ = parse(w6)
+    v24, crc24, _, _ = parse(w24)
 
     # Not enough samples for trend math. If all rows are failures/sentinels,
     # return an explicit failure feature set so the caller can alert.
@@ -287,6 +291,8 @@ def features(cur, sensor):
                 "sample_size": 0,
                 "instability_ratio": 1.0,
                 "crc_rate": sum(crc) / max(1, len(crc)),
+                "crc_rate_6h": sum(crc6) / max(1, len(crc6)),
+                "crc_rate_24h": sum(crc24) / max(1, len(crc24)),
                 "failure_rows": failures,
                 "invalid_readings": invalid_readings,
                 "row_count": len(w1),
@@ -320,6 +326,8 @@ def features(cur, sensor):
         "sample_size": s1["count"],
         "instability_ratio": len(set(v1)) / max(1, len(v1)),
         "crc_rate": sum(crc) / max(1, len(crc)),
+        "crc_rate_6h": sum(crc6) / max(1, len(crc6)),
+        "crc_rate_24h": sum(crc24) / max(1, len(crc24)),
         "failure_rows": failures,
         "invalid_readings": invalid_readings,
         "invalid_ratio": invalid_readings / max(1, len(v1) + invalid_readings),
@@ -594,10 +602,27 @@ def score(f, ema, profile):
         score -= 10
         notes.append("above expected range")
 
-    # CRC sensitivity
+    # CRC sensitivity. Short bursts can happen on a DS18B20 bus, but a sensor
+    # with persistent 6h/24h CRC history should not present as fully healthy.
     if f["crc_rate"] > 0.3 * profile["crc_sensitivity"]:
         score -= 25
         notes.append("crc instability")
+
+    persistent_crc_rate = max(
+        f.get("crc_rate_6h", 0),
+        f.get("crc_rate_24h", 0),
+    )
+
+    if persistent_crc_rate >= (
+        CRC_PERSISTENT_SEVERE_RATE * profile["crc_sensitivity"]
+    ):
+        score -= 25
+        notes.append("severe persistent crc instability")
+    elif persistent_crc_rate >= (
+        CRC_PERSISTENT_WARNING_RATE * profile["crc_sensitivity"]
+    ):
+        score -= 15
+        notes.append("persistent crc instability")
 
     if f.get("invalid_readings"):
         score -= min(50, 25 + int(f["invalid_ratio"] * 50))

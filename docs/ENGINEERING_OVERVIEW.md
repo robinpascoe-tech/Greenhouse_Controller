@@ -215,7 +215,7 @@ The controller is fail-safe oriented:
 `sensor_health.py` evaluates diagnostic history rather than only current
 temperatures. It looks for:
 
-- CRC instability
+- current and persistent CRC instability
 - high noise
 - short-term and long-term drift
 - flatline readings
@@ -235,6 +235,12 @@ events where sensors can move at different rates while still behaving
 correctly. A peer outlier penalty requires at least three comparable inside-air
 sensors, so a two-sensor Front/Back disagreement is noted cautiously instead
 of being treated as proof that one sensor is bad.
+
+CRC failures are treated as a reliability signal even when temperatures remain
+plausible. A short CRC burst is scored through the current 1-hour `crc_rate`,
+while persistent 6-hour or 24-hour CRC instability adds a separate penalty so a
+sensor with ongoing bus, wiring, or read issues does not report as fully
+healthy.
 
 Health statuses include:
 
@@ -285,6 +291,7 @@ The harness currently exercises:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health persistent CRC instability even when the current hour is clean
 
 The harness needs admin database permissions because it creates and drops a
 throwaway test database. Set the password with:

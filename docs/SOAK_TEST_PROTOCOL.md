@@ -222,6 +222,7 @@ Review sensor reliability:
 - stale or missing `OutsideTemp`
 - DS18B20 sentinel values such as `85.0 C` or `-127.0 C`
 - CRC instability
+- persistent CRC instability over 6-hour and 24-hour windows
 - flatline readings
 - noisy or drifting sensors
 - sensor-health alerts and cooldown behavior

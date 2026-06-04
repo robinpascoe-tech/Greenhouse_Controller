@@ -1483,6 +1483,60 @@ def test_sensor_health_peer_outlier(sensor_health):
     }
 
 
+def test_sensor_health_persistent_crc(sensor_health):
+    clear_sensor_health_tables()
+    sensor_health.ALERTS_ENABLED = False
+
+    now = datetime.now(timezone.utc)
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            for offset in range(12):
+                timestamp = now - timedelta(minutes=offset * 5)
+                variation = Decimal(str((offset % 4) * 0.03))
+                insert_diag_at(cur, "FrontTemp", timestamp, Decimal("22.0") + variation)
+                insert_diag_at(cur, "BackTemp", timestamp, Decimal("22.1") + variation)
+
+            # Older CRC failures should still affect health even when the
+            # latest 1-hour window is clean.
+            for offset in range(12, 72):
+                timestamp = now - timedelta(minutes=offset * 5)
+                crc = 1 if offset % 2 == 0 else 0
+                variation = Decimal(str((offset % 4) * 0.03))
+                insert_diag_at(cur, "FrontTemp", timestamp, Decimal("21.9") + variation, crc=crc)
+                insert_diag_at(cur, "BackTemp", timestamp, Decimal("22.1") + variation)
+    finally:
+        con.close()
+
+    sensor_health.main()
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT sensor_name, health_score, status, notes, crc_rate
+                FROM sensor_health
+                WHERE sensor_name IN ('FrontTemp', 'BackTemp')
+                ORDER BY sensor_name
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        con.close()
+
+    front = [row for row in rows if row[0] == "FrontTemp"][0]
+    back = [row for row in rows if row[0] == "BackTemp"][0]
+
+    return {
+        "health_rows": rows,
+        "front_not_fully_healthy": front[2] != "HEALTHY"
+        and "persistent crc instability" in front[3],
+        "back_remains_healthy": back[2] == "HEALTHY",
+    }
+
+
 def test_ds18b20_weird_values(sensor_health):
     clear_sensor_health_tables()
     sensor_health.ALERTS_ENABLED = True
@@ -1657,6 +1711,9 @@ def main():
             test_sensor_health_greenhouse_ramp_context(sensor_health)
         ),
         "sensor_health_peer_outlier": test_sensor_health_peer_outlier(sensor_health),
+        "sensor_health_persistent_crc": test_sensor_health_persistent_crc(
+            sensor_health
+        ),
         "ds18b20_weird_values": test_ds18b20_weird_values(sensor_health),
         "alert_cooldown": test_alert_cooldown(sensor_health),
     }
