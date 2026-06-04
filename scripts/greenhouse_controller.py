@@ -12,6 +12,7 @@
 # - In-memory short-cycle protection
 # - Window reversal lockout
 # - Dynamic hysteresis widening
+# - One-loop sensor freshness grace for delayed currenttemp updates
 #
 # v4.3.2 fixes:
 # - Operator overrides bypass short-cycle protection
@@ -140,7 +141,12 @@ SENSOR_PRIORITY = [
 ]
 
 OUTSIDE_SENSOR_NAME = "OutsideTemp"
-MAX_SENSOR_AGE_SECONDS = 60
+MAX_SENSOR_AGE_SECONDS = 90
+MAX_RECENT_SENSOR_AGE_SECONDS = 120
+
+# A single slightly late sensor-reader run should not stop the controller, but
+# repeated stale readings still force the normal emergency shutdown path.
+recent_sensor_grace_used = False
 
 # Cooling strategy tuning. These conservative defaults only affect which
 # cooling method is preferred once SQL thresholds already call for cooling.
@@ -784,6 +790,8 @@ def get_sensor_data():
 def select_working_temperature(sensors):
     """Select best available fresh temperature source."""
 
+    global recent_sensor_grace_used
+
     for sensor_name in SENSOR_PRIORITY:
         sensor = sensors.get(sensor_name)
 
@@ -791,10 +799,31 @@ def select_working_temperature(sensors):
             continue
 
         if sensor["age"] <= MAX_SENSOR_AGE_SECONDS:
+            recent_sensor_grace_used = False
+
             if sensor_name != "AverageInsideTemp":
                 logger.warning("Using fallback sensor: %s", sensor_name)
 
             return sensor["temp"]
+
+    # Allow one controller loop to ride through a slightly delayed sensor update.
+    # This protects against a missed cron edge while preserving fail-safe behavior
+    # if read_sensors.py truly stops updating currenttemp.
+    if not recent_sensor_grace_used:
+        for sensor_name in SENSOR_PRIORITY:
+            sensor = sensors.get(sensor_name)
+
+            if not sensor:
+                continue
+
+            if sensor["age"] <= MAX_RECENT_SENSOR_AGE_SECONDS:
+                recent_sensor_grace_used = True
+                logger.warning(
+                    "Using recent but stale sensor %s at %.0fs old.",
+                    sensor_name,
+                    sensor["age"],
+                )
+                return sensor["temp"]
 
     logger.error("No valid fresh sensors available.")
     shutdownnow()

@@ -950,6 +950,49 @@ def test_partial_sensor_failure(thermostat, clock, gpio):
     }
 
 
+def test_sensor_freshness_grace(thermostat):
+    thermostat.recent_sensor_grace_used = False
+
+    recent_temp = thermostat.select_working_temperature({
+        "AverageInsideTemp": {"temp": Decimal("21.25"), "age": 95},
+    })
+    grace_used_after_recent = thermostat.recent_sensor_grace_used
+
+    fresh_temp = thermostat.select_working_temperature({
+        "AverageInsideTemp": {"temp": Decimal("22.00"), "age": 10},
+    })
+    grace_reset_after_fresh = not thermostat.recent_sensor_grace_used
+
+    shutdown_called = False
+    old_shutdown = thermostat.shutdownnow
+
+    def fake_shutdown():
+        nonlocal shutdown_called
+        shutdown_called = True
+        raise SystemExit(1)
+
+    thermostat.shutdownnow = fake_shutdown
+    thermostat.recent_sensor_grace_used = False
+    try:
+        try:
+            thermostat.select_working_temperature({
+                "AverageInsideTemp": {"temp": Decimal("23.00"), "age": 121},
+            })
+        except SystemExit:
+            pass
+    finally:
+        thermostat.shutdownnow = old_shutdown
+        thermostat.recent_sensor_grace_used = False
+
+    return {
+        "recent_temp": str(recent_temp),
+        "grace_used_after_recent": grace_used_after_recent,
+        "fresh_temp": str(fresh_temp),
+        "grace_reset_after_fresh": grace_reset_after_fresh,
+        "shutdown_after_too_stale": shutdown_called,
+    }
+
+
 def test_outside_temperature_selection(thermostat, clock, gpio):
     reset_controller_state(thermostat, clock, gpio)
     update_currenttemps(Decimal("20.0"), Decimal("-4.5"))
@@ -1689,6 +1732,7 @@ def main():
         "partial_sensor_failure": test_partial_sensor_failure(
             thermostat, clock, gpio
         ),
+        "sensor_freshness_grace": test_sensor_freshness_grace(thermostat),
         "outside_temperature_selection": test_outside_temperature_selection(
             thermostat, clock, gpio
         ),
