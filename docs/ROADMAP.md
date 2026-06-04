@@ -187,7 +187,65 @@ Useful alert types:
 Alerts should keep cooldowns and severity levels so they remain useful instead
 of noisy.
 
-## 6. Forecast-Aware Control
+## 6. Sensor Health And Soak Analysis Tools
+
+The second greenhouse soak test showed that health scoring needs to distinguish
+temperature plausibility from reliability. A sensor can track temperature well
+while still having persistent CRC errors that deserve attention.
+
+High-value follow-up tools:
+
+- 1-Wire bus health report: summarize CRC rates by sensor over 1h, 6h, 24h,
+  and full soak-test windows.
+- Installed wiring diagnostics: flag sensors whose CRC rate is much worse than
+  the rest of the bus and suggest checks such as connector quality, cable
+  routing, moisture intrusion, pull-up resistance, splice quality, and sensor
+  replacement.
+- Role-specific sensor health scoring: tune outdoor, system, equipment, and
+  derived sensors differently from inside-air peer sensors.
+- Soak-test report generator: turn database dumps, logs, replay outputs, and
+  notes into a repeatable summary of actuator events, sensor reliability,
+  stale gaps, CRC history, temperature response, and unexpected behavior.
+- Maintenance and annotation logging: provide a simple table or CLI for marking
+  events such as door open, Pi backup, sensor replacement, watering, manual
+  work, or power/network maintenance.
+
+This work should build on `tools/replay_sensor_health_history.py`, which can
+re-run `sensor_health.py` against historical diagnostic data with realistic
+rolling time windows.
+
+## 7. Pi Reliability And Self-Recovery
+
+Add Raspberry Pi platform reliability features so the controller can recover
+from common unattended-field failures.
+
+Watchdog integration:
+
+- Enable and document the Raspberry Pi/Linux hardware watchdog.
+- Add a lightweight heartbeat that only feeds the watchdog when critical
+  services are healthy.
+- Decide which conditions should stop feeding the watchdog and allow a reboot,
+  such as controller lockup, repeated failed safe-shutdown attempts, or severe
+  system instability.
+- Make sure watchdog behavior does not fight normal service restarts or
+  intentional maintenance.
+
+Wireless health and repair:
+
+- Create a script that checks Wi-Fi interface state, IP address, default route,
+  DNS resolution, and reachability of expected local/network targets.
+- Attempt gentle recovery first, such as restarting networking components or
+  cycling the wireless interface.
+- Escalate only after repeated failures, possibly by coordinating with the
+  watchdog or intentionally rebooting the Pi.
+- Log repair attempts to a file and/or SQL table so connectivity issues can be
+  reviewed after a soak test.
+
+This should be designed carefully: greenhouse control must remain safe even
+when network repair is running, and wireless repair should not interrupt the
+controller unless a reboot is truly warranted.
+
+## 8. Forecast-Aware Control
 
 Use an online weather forecast to make earlier, more efficient control decisions.
 
@@ -204,7 +262,7 @@ Possible behaviors:
 Forecast-aware control should fail gracefully when the internet, API, or
 forecast data is unavailable.
 
-## 7. Dashboard Modernization
+## 9. Dashboard Modernization
 
 Replace or supplement the legacy PHP dashboard with a modern interface.
 
@@ -223,7 +281,7 @@ High-value dashboard views:
 Dashboard work should follow the controller state model rather than duplicating
 control logic.
 
-## 8. Simulation And Test Expansion
+## 10. Simulation And Test Expansion
 
 Keep growing the simulation harness as smarter behavior is added.
 
@@ -242,6 +300,9 @@ Important future scenarios:
 - stuck-high, stuck-low, drifting, noisy, and stale sensors
 - heater ineffective while temperature trends down
 - cooling ineffective while temperature trends up
+- cooling-effectiveness metrics after fan/window operation, including drop
+  rate, overcooling, and rebound
+- cold-weather soak or simulation coverage that exercises real heater behavior
 - override conflicts with safety shutdown
 - forecast unavailable or clearly stale
 - database outage during active heating or cooling
@@ -256,6 +317,9 @@ The simulation harness should remain the confidence engine for behavior changes.
 4. Move sensor ID mapping out of code and into config or SQL.
 5. Build an interactive sensor assignment tool.
 6. Build a DS18B20 qualification and calibration tool.
-7. Add expanded trend-based alerting.
-8. Add forecast ingestion and forecast-aware decisions.
-9. Build a modern dashboard around the improved state model.
+7. Add 1-Wire bus health and role-specific sensor-health reporting.
+8. Add soak-test report generation and maintenance annotations.
+9. Add Pi watchdog and wireless self-recovery support.
+10. Add expanded trend-based alerting.
+11. Add forecast ingestion and forecast-aware decisions.
+12. Build a modern dashboard around the improved state model.
