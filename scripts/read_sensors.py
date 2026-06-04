@@ -177,15 +177,15 @@ def read_sensor(sensor_name, path):
     trimmed = readings[1:-1]
     avg = sum(trimmed) / len(trimmed)
 
-    stale = len(set(readings)) == 1
+    # Identical values across a five-sample burst are common with DS18B20
+    # resolution/quantization, so this is informational rather than a fault.
+    stale_burst = len(set(readings)) == 1
 
     logger.info(
         f"{sensor_name} time={duration:.3f}s "
-        f"raw={readings} median={median:.2f} avg={avg:.2f}"
+        f"raw={readings} median={median:.2f} avg={avg:.2f} "
+        f"stale_burst={stale_burst}"
     )
-
-    if stale:
-        logger.warning(f"{sensor_name} appears STALE")
 
     return {
         "ok": True,

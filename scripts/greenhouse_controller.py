@@ -144,7 +144,9 @@ SENSOR_PRIORITY = [
     "BackTemp",
 ]
 
-MAX_SENSOR_AGE_SECONDS = 60
+MAX_SENSOR_AGE_SECONDS = 90
+MAX_RECENT_SENSOR_AGE_SECONDS = 120
+recent_sensor_grace_used = False
 
 
 # ================================================================
@@ -796,6 +798,8 @@ def get_sensor_data():
 def select_working_temperature(sensors):
     """Select best available fresh temperature source."""
 
+    global recent_sensor_grace_used
+
     for sensor_name in SENSOR_PRIORITY:
         sensor = sensors.get(sensor_name)
 
@@ -803,10 +807,31 @@ def select_working_temperature(sensors):
             continue
 
         if sensor["age"] <= MAX_SENSOR_AGE_SECONDS:
+            recent_sensor_grace_used = False
+
             if sensor_name != "AverageInsideTemp":
                 logger.warning("Using fallback sensor: %s", sensor_name)
 
             return sensor["temp"]
+
+    # Allow one controller loop to ride through a slightly delayed sensor update.
+    # This protects against a missed cron edge while preserving fail-safe behavior
+    # if read_sensors.py truly stops updating currenttemp.
+    if not recent_sensor_grace_used:
+        for sensor_name in SENSOR_PRIORITY:
+            sensor = sensors.get(sensor_name)
+
+            if not sensor:
+                continue
+
+            if sensor["age"] <= MAX_RECENT_SENSOR_AGE_SECONDS:
+                recent_sensor_grace_used = True
+                logger.warning(
+                    "Using recent but stale sensor %s at %.0fs old.",
+                    sensor_name,
+                    sensor["age"],
+                )
+                return sensor["temp"]
 
     logger.error("No valid fresh sensors available.")
     shutdownnow()
