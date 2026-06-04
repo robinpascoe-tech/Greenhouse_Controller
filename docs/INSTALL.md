@@ -63,11 +63,13 @@ cd /home/pi/Greenhouse_Controller
 
 Repository: [robinpascoe-tech/Greenhouse_Controller](https://github.com/robinpascoe-tech/Greenhouse_Controller)
 
-For release-candidate greenhouse testing, check out the current stable tag:
+For release-candidate greenhouse testing, use the latest `main` branch unless
+you intentionally want to reproduce an older tagged release:
 
 ```bash
 git fetch --all --tags
-git checkout v0.9.1
+git switch main
+git pull --ff-only
 ```
 
 If you use a different path, update:

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Sensor Health Engine v3.3.1 (Stabilization Patch)
+Sensor Health Engine v3.3.1 (Stabilization + Peer Context)
 
 This version focuses on:
 - Fixing regressions introduced in v3.3
 - Restoring operational alerting
 - Preventing status oscillation (hysteresis)
 - Unifying decision logic with sensor profiles
+- Adding peer/environment context for normal greenhouse temperature gradients
 - Improving maintainability and debugging clarity
 
 This is intended to run as a cron-based process on a Raspberry Pi.

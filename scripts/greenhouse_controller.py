@@ -12,6 +12,7 @@
 # - In-memory short-cycle protection
 # - Window reversal lockout
 # - Dynamic hysteresis widening
+# - One-loop sensor freshness grace for delayed currenttemp updates
 #
 # v4.3.2 fixes:
 # - Operator overrides bypass short-cycle protection
@@ -146,6 +147,9 @@ SENSOR_PRIORITY = [
 
 MAX_SENSOR_AGE_SECONDS = 90
 MAX_RECENT_SENSOR_AGE_SECONDS = 120
+
+# A single slightly late sensor-reader run should not stop the controller, but
+# repeated stale readings still force the normal emergency shutdown path.
 recent_sensor_grace_used = False
 
 

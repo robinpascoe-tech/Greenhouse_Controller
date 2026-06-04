@@ -19,8 +19,10 @@ greenhouse automation systems.
 - Uses SQL-driven day schedules for temperature thresholds.
 - Supports temporary fan and window overrides.
 - Adds short-cycle protection and dynamic hysteresis widening.
-- Detects stale sensors and fails safe.
-- Scores sensor health and detects degradation/failure patterns.
+- Detects stale sensors, allows one short grace cycle for delayed readings, and
+  then fails safe.
+- Scores sensor health with peer/environment context and detects
+  degradation/failure patterns.
 - Provides a simulation harness for testing controller behavior without moving
   real relays.
 
@@ -232,16 +234,18 @@ The harness covers scenarios such as:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health greenhouse ramp context
+- sensor-health peer outlier detection
 
-## Current Release Candidate
+## Current Release Candidate / Active Soak
 
-`v0.9.1` is the current release candidate for real greenhouse soak testing. It
-builds on `v0.9.0` with UTC timestamp consistency, clearer tri-state manual
-override semantics, and safer default temperature schedules.
+`main` currently contains the active release-candidate code for real greenhouse
+soak testing. It builds on the `v0.9.1` tag with post-tag fixes for sensor
+freshness handling, quieter stale-burst sensor logging, and sensor-health peer
+context.
 
-The recommended next step is a multi-day live soak test from `main` at the
-`v0.9.1` tag, followed by log/database analysis before promoting toward
-`v1.0.0`.
+The recommended next step is a multi-day live soak test from latest `main`,
+followed by log/database analysis before promoting toward `v1.0.0`.
 
 ## Legacy Dashboard
 

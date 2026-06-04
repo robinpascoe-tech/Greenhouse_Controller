@@ -63,9 +63,10 @@ archive/
    `overrides`, and drives GPIO outputs.
 5. The controller updates `status` as actuator states change.
 6. When `status` changes, the controller appends a row to `status_log`.
-7. `sensor_health.py` runs periodically, reads `sensor_diagnostics`, writes
-   health snapshots to `sensor_health`, stores smoothing state in
-   `sensor_state`, and records alerts in `sensor_alerts`.
+7. `sensor_health.py` runs periodically, reads `sensor_diagnostics`, applies
+   sensor profile and peer/environment context, writes health snapshots to
+   `sensor_health`, stores smoothing state in `sensor_state`, and records
+   alerts in `sensor_alerts`.
 
 ## Time Handling
 
@@ -120,16 +121,22 @@ greenhouse operating periods.
 
 ## Temperature Selection
 
-The main controller intentionally ignores stale readings. A sensor row is usable
-only if its timestamp is recent enough. The priority order is:
+The main controller intentionally rejects stale readings. Under normal
+conditions a sensor row is usable only if it is no more than 90 seconds old.
+The priority order is:
 
 1. `AverageInsideTemp`
 2. `FrontTemp`
 3. `BackTemp`
 
-If none of those readings are fresh, the controller enters emergency shutdown:
-fans and heater are turned off, windows are closed, GPIO cleanup is called, and
-the process exits.
+If no preferred sensor is fresh, the controller allows one grace loop using a
+recent reading up to 120 seconds old. This avoids a shutdown from a single
+slightly delayed cron run while still preserving fail-safe behavior if
+`read_sensors.py` stops updating `currenttemp`.
+
+If no preferred sensor is fresh or recent enough after that grace loop, the
+controller enters emergency shutdown: fans and heater are turned off, windows
+are closed, GPIO cleanup is called, and the process exits.
 
 Outside temperature is recorded and useful for dashboards or future control
 logic, but the current controller makes actuator decisions from inside
@@ -214,7 +221,8 @@ The controller is fail-safe oriented:
 - `SIGTERM` and `KeyboardInterrupt` route through emergency shutdown.
 - Emergency shutdown turns off heater/fans, closes windows, calls GPIO cleanup,
   and exits.
-- Missing or stale inside sensor data causes emergency shutdown.
+- Missing or stale inside sensor data causes emergency shutdown after the
+  one-loop recent-reading grace period.
 - Missing `status` or `overrides` singleton rows are repaired at startup.
 
 ## Sensor Health
@@ -228,6 +236,19 @@ temperatures. It looks for:
 - flatline readings
 - DS18B20 sentinel values such as `85.0 C` and `-127.0 C`
 - total sensor failure rows
+
+Sensor profiles and known sensor names are used to avoid comparing unlike
+readings. `FrontTemp`, `BackTemp`, and future additional inside-air sensors can
+share the same peer group. `AverageInsideTemp` is treated as a derived sensor,
+`OutsideTemp` as outside air, and `PiTemp`/`WoodstoveTemp` as special-purpose
+sensors.
+
+Normal greenhouse ramps can create real differences between front and back
+temperatures, especially during sun exposure, door openings, or window cooling.
+The health engine now records this as environmental context instead of treating
+every indoor difference as degradation. Peer outlier penalties require at least
+three comparable peer sensors, so a two-sensor greenhouse still benefits from
+trend context without pretending it can prove which single sensor is wrong.
 
 Health statuses include:
 
@@ -278,6 +299,8 @@ The harness currently exercises:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health greenhouse ramp context
+- sensor-health peer outlier detection with three or more comparable sensors
 
 The harness needs admin database permissions because it creates and drops a
 throwaway test database. Set the password with:

@@ -16,7 +16,10 @@ core product, not as incidental implementation detail.
 
 - `main` is the stable release-candidate baseline for field soak testing.
 - `develop` is the active development branch for new controller behavior.
-- `v0.9.1` is the current release-candidate tag for the active soak test.
+- `v0.9.1` is the most recent tagged release candidate.
+- The active v1.0.0 soak candidate is latest `main`, which includes post-tag
+  fixes for sensor freshness, quieter stale-burst sensor logging, and
+  sensor-health peer context.
 - `v0.9.0` is the initial release-candidate tag kept for comparison.
 - Smarter controller work, including outside-aware cooling, lives on `develop`
   unless merged later.
@@ -59,7 +62,8 @@ different safety design:
 - Emergency shutdown turns heater/fans off, closes windows, calls GPIO cleanup,
   and exits.
 - `SIGTERM` and `KeyboardInterrupt` route through safe shutdown.
-- Missing or stale inside temperature data triggers emergency shutdown.
+- Missing or stale inside temperature data triggers emergency shutdown after
+  one recent-reading grace controller loop.
 - Startup repairs missing singleton `status` and `overrides` rows.
 - Manual fan/window overrides bypass short-cycle protection but still record
   actuator movement.

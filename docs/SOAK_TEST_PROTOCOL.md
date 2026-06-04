@@ -7,17 +7,17 @@ candidate.
 
 ## Recommended Test Order
 
-Run the current real greenhouse soak test from `main` at the `v0.9.1` tag. This
-keeps the field test focused on the stable release-candidate baseline while
-including the timestamp, override, dashboard, and default-schedule fixes made
-after the initial `v0.9.0` pass.
+Run the current real greenhouse soak test from latest `main`. This keeps the
+field test focused on the stable release-candidate baseline while including the
+timestamp, override, dashboard, default-schedule, sensor freshness, and
+sensor-health fixes made after the initial `v0.9.0` pass.
 
 After the baseline is understood, run a separate soak test from `develop` to
 evaluate newer behavior such as outside-temperature-aware cooling.
 
 Suggested sequence:
 
-1. Soak test `main` / `v0.9.1` for several days.
+1. Soak test latest `main` for several days.
 2. Analyze logs, SQL history, and field notes.
 3. Fix any release-candidate issues or promote a stable release.
 4. Soak test `develop` as the next smarter-controller candidate.
@@ -48,14 +48,16 @@ git rev-parse HEAD
 git describe --tags --always
 ```
 
-For a `v0.9.1` baseline soak:
+For the active release-candidate soak:
 
 ```bash
 git fetch --all --tags
 git switch main
 git pull --ff-only
-git checkout v0.9.1
 ```
+
+To reproduce the older tagged `v0.9.1` baseline exactly, check out
+`v0.9.1` instead of latest `main`.
 
 Check service status and recent logs:
 
@@ -221,6 +223,7 @@ Evaluate greenhouse thermal behavior after actuator changes:
 Review sensor reliability:
 
 - stale inside sensor readings
+- recent-but-stale grace events
 - fallback from `AverageInsideTemp` to `FrontTemp` or `BackTemp`
 - stale or missing `OutsideTemp`
 - DS18B20 sentinel values such as `85.0 C` or `-127.0 C`
@@ -228,6 +231,9 @@ Review sensor reliability:
 - flatline readings
 - noisy or drifting sensors
 - sensor-health alerts and cooldown behavior
+- environmental trend notes that prevent normal greenhouse ramps from being
+  marked as degradation
+- peer outlier detection if three or more comparable inside-air sensors exist
 
 ### Safety And Failure Handling
 
@@ -264,7 +270,7 @@ Investigate before promoting a release if any of these appear:
 - heater runs but temperature continues falling for a long period
 - fans/windows cause large overcooling events
 - repeated dynamic hysteresis warnings
-- repeated sensor fallback or stale sensor warnings
+- repeated sensor fallback or recent-but-stale grace warnings
 - emergency shutdown during normal conditions
 - MariaDB connection failures outside deliberate testing
 - windows fail to close at shutdown
