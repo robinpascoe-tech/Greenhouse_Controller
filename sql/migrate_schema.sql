@@ -285,7 +285,7 @@ INSERT INTO `sensor_profile`
 VALUES
   ('BackTemp', 'indoor', -10, 50, 1.0, 1.0, 1.0, 1.0, NOW()),
   ('FrontTemp', 'indoor', -10, 50, 1.0, 1.0, 1.0, 1.0, NOW()),
-  ('PiTemp', 'indoor', -10, 80, 1.0, 1.0, 1.0, 1.0, NOW()),
+  ('PiTemp', 'system', -10, 80, 1.0, 1.0, 1.0, 1.0, NOW()),
   ('OutsideTemp', 'outdoor', -40, 50, 2.0, 1.5, 1.5, 1.0, NOW()),
   ('WoodstoveTemp', 'equipment', -10, 120, 4.0, 2.0, 2.0, 1.0, NOW()),
   ('AverageInsideTemp', 'derived', -10, 50, 1.0, 1.0, 1.0, 1.0, NOW())

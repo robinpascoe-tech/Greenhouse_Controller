@@ -1152,6 +1152,18 @@ def insert_diag(cur, sensor, rows, raw, crc=0, notes="ok"):
         )
 
 
+def insert_diag_at(cur, sensor, timestamp, value, crc=0, notes="ok"):
+    raw = ",".join(str(value) for _ in range(5))
+    cur.execute(
+        """
+        INSERT INTO sensor_diagnostics
+        (sensor_name, timestamp, raw_values, median, average, crc_failures, notes)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """,
+        (sensor, timestamp, raw, value, value, crc, notes),
+    )
+
+
 def test_sensor_health(sensor_health):
     clear_sensor_health_tables()
     sensor_health.ALERTS_ENABLED = True
@@ -1194,6 +1206,112 @@ def test_sensor_health(sensor_health):
         "health_rows": rows,
         "alert_rows": alerts,
         "send_email_calls": len(sent),
+    }
+
+
+def test_sensor_health_greenhouse_ramp_context(sensor_health):
+    clear_sensor_health_tables()
+    sensor_health.ALERTS_ENABLED = False
+
+    now = datetime.now(timezone.utc)
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            ramp_rows = [
+                (55, 23.0, 22.0),
+                (50, 23.5, 22.2),
+                (45, 24.5, 22.8),
+                (40, 25.5, 23.5),
+                (35, 27.0, 24.2),
+                (30, 28.5, 25.0),
+                (25, 30.0, 25.8),
+                (20, 31.5, 26.5),
+                (15, 33.0, 27.4),
+                (10, 34.0, 28.0),
+                (5, 35.0, 28.6),
+                (0, 36.0, 29.0),
+            ]
+
+            for minutes_ago, front, back in ramp_rows:
+                timestamp = now - timedelta(minutes=minutes_ago)
+                insert_diag_at(cur, "FrontTemp", timestamp, front)
+                insert_diag_at(cur, "BackTemp", timestamp, back)
+
+            # Older context creates large short/long drift, matching sunny
+            # greenhouse ramps seen in the soak data.
+            for hours_ago, front, back in [(6, 22.0, 21.5), (24, 20.0, 20.0)]:
+                timestamp = now - timedelta(hours=hours_ago)
+                for _ in range(4):
+                    insert_diag_at(cur, "FrontTemp", timestamp, front)
+                    insert_diag_at(cur, "BackTemp", timestamp, back)
+    finally:
+        con.close()
+
+    sensor_health.main()
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT sensor_name, health_score, status, notes
+                FROM sensor_health
+                WHERE sensor_name IN ('FrontTemp', 'BackTemp')
+                ORDER BY sensor_name
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        con.close()
+
+    return {
+        "health_rows": rows,
+        "no_false_degradation": all(row[2] in ("HEALTHY", "STABLE") for row in rows),
+    }
+
+
+def test_sensor_health_peer_outlier(sensor_health):
+    clear_sensor_health_tables()
+    sensor_health.ALERTS_ENABLED = False
+
+    now = datetime.now(timezone.utc)
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            for offset in range(12):
+                timestamp = now - timedelta(minutes=offset * 5)
+                variation = Decimal(str((offset % 3) * 0.05))
+                insert_diag_at(cur, "FrontTemp", timestamp, Decimal("22.0") + variation)
+                insert_diag_at(cur, "MiddleTemp", timestamp, Decimal("34.0") + variation)
+                insert_diag_at(cur, "BackTemp", timestamp, Decimal("22.4") + variation)
+    finally:
+        con.close()
+
+    sensor_health.main()
+
+    con = root_conn(TEST_DB)
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """
+                SELECT sensor_name, health_score, status, notes
+                FROM sensor_health
+                WHERE sensor_name IN ('FrontTemp', 'MiddleTemp', 'BackTemp')
+                ORDER BY sensor_name
+                """
+            )
+            rows = cur.fetchall()
+    finally:
+        con.close()
+
+    middle = [row for row in rows if row[0] == "MiddleTemp"][0]
+
+    return {
+        "health_rows": rows,
+        "middle_flagged_as_outlier": middle[2] in ("DEGRADED", "CRITICAL")
+        and "peer outlier" in middle[3],
     }
 
 
@@ -1360,6 +1478,10 @@ def main():
         ),
         "strict_sql_mode": test_strict_sql_mode(),
         "sensor_health": test_sensor_health(sensor_health),
+        "sensor_health_greenhouse_ramp_context": (
+            test_sensor_health_greenhouse_ramp_context(sensor_health)
+        ),
+        "sensor_health_peer_outlier": test_sensor_health_peer_outlier(sensor_health),
         "ds18b20_weird_values": test_ds18b20_weird_values(sensor_health),
         "alert_cooldown": test_alert_cooldown(sensor_health),
     }
