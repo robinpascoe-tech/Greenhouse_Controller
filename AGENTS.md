@@ -14,15 +14,12 @@ core product, not as incidental implementation detail.
 
 ## Branches And Release State
 
-- `main` is the stable release-candidate baseline for field soak testing.
+- `main` is the stable release branch.
 - `develop` is the active development branch for new controller behavior.
-- `v0.9.1` is the most recent tagged release candidate.
-- The active v1.0.0 soak candidate is latest `main`, which includes post-tag
-  fixes for sensor freshness, quieter stale-burst sensor logging, and
-  sensor-health peer context.
-- `v0.9.0` is the initial release-candidate tag kept for comparison.
-- Smarter controller work, including outside-aware cooling, lives on `develop`
-  unless merged later.
+- `v1.0.0` is the first field-tested stable release.
+- `v0.9.1` and `v0.9.0` are older release-candidate tags kept for comparison.
+- Smarter controller work, including outside-aware cooling and expanded sensor
+  diagnostics, lives on `develop` unless merged later.
 
 Do not move existing release tags unless explicitly asked.
 

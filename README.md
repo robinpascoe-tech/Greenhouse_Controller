@@ -103,6 +103,7 @@ config/
 docs/
   INSTALL.md                 Installation guide.
   ENGINEERING_OVERVIEW.md    System architecture and behavior notes.
+  RELEASE_NOTES.md           Release highlights and known notes.
   SOAK_TEST_PROTOCOL.md      Field soak-test collection and analysis guide.
 
 html/
@@ -237,15 +238,17 @@ The harness covers scenarios such as:
 - sensor-health greenhouse ramp context
 - sensor-health peer outlier detection
 
-## Current Release Candidate / Active Soak
+## Current Stable Release
 
-`main` currently contains the active release-candidate code for real greenhouse
-soak testing. It builds on the `v0.9.1` tag with post-tag fixes for sensor
-freshness handling, quieter stale-burst sensor logging, and sensor-health peer
-context.
+`main` contains the stable controller baseline. `v1.0.0` is the first
+field-tested stable release, promoted after multi-day greenhouse soak testing
+confirmed safe shutdown, restart recovery, sensor freshness handling, scheduled
+circulation fan behavior, window/fan cooling behavior, database logging, and
+dashboard compatibility.
 
-The recommended next step is a multi-day live soak test from latest `main`,
-followed by log/database analysis before promoting toward `v1.0.0`.
+Future controller changes should normally be developed on `develop`, soak
+tested separately, and merged back to `main` only after they are ready for the
+next stable release.
 
 ## Legacy Dashboard
 
@@ -258,9 +261,6 @@ files on a public or production system.
 
 ## Known Limitations
 
-- Real-world greenhouse soak testing is still in progress. Treat the current
-  release as a release candidate until it has run through several days of live
-  weather and actuator behavior.
 - Sensor IDs, GPIO pins, relay behavior, motor timing, and SQL schedules are
   installation-specific and must be reviewed before use on different hardware.
 - The simulation harness verifies controller logic, but it cannot prove relay
@@ -268,6 +268,8 @@ files on a public or production system.
   greenhouse.
 - The legacy dashboard is included for reference and has not yet been modernized
   to the same standard as the Python controller.
+- DS18B20 sensor quality varies. The controller records CRC and diagnostic
+  history, but users should still validate and periodically inspect sensors.
 - Wiring diagrams and deployment examples are planned but not included yet.
 
 ## Contributing
@@ -304,9 +306,9 @@ possible.
 
 ## Project Status
 
-This project is being prepared for public use and review. It began as a real
-greenhouse controller and still contains some legacy material alongside the
-newer refactored Python scripts.
+This project is ready for public use and review as a field-tested Raspberry Pi
+greenhouse controller. It began as a real greenhouse controller and still
+contains some legacy material alongside the newer refactored Python scripts.
 
 Expect to review configuration, GPIO assignments, sensor IDs, and SQL passwords
 before using it in your own greenhouse.

@@ -2,15 +2,15 @@
 
 This protocol describes how to run and collect evidence from a multi-day
 greenhouse controller soak test. The goal is to compare real greenhouse
-operation against expected controller behavior before promoting a release
-candidate.
+operation against expected controller behavior before promoting a release or
+validating a development branch.
 
 ## Recommended Test Order
 
-Run the current real greenhouse soak test from latest `main`. This keeps the
-field test focused on the stable release-candidate baseline while including the
+For release validation, run the real greenhouse soak test from latest `main`.
+This keeps the field test focused on the stable branch while including the
 timestamp, override, dashboard, default-schedule, sensor freshness, and
-sensor-health fixes made after the initial `v0.9.0` pass.
+sensor-health fixes that were validated for `v1.0.0`.
 
 After the baseline is understood, run a separate soak test from `develop` to
 evaluate newer behavior such as outside-temperature-aware cooling.
@@ -19,7 +19,7 @@ Suggested sequence:
 
 1. Soak test latest `main` for several days.
 2. Analyze logs, SQL history, and field notes.
-3. Fix any release-candidate issues or promote a stable release.
+3. Fix any release issues or promote/tag the stable release.
 4. Soak test `develop` as the next smarter-controller candidate.
 
 ## Test Duration
@@ -48,7 +48,7 @@ git rev-parse HEAD
 git describe --tags --always
 ```
 
-For the active release-candidate soak:
+For a stable-branch soak:
 
 ```bash
 git fetch --all --tags
@@ -56,8 +56,8 @@ git switch main
 git pull --ff-only
 ```
 
-To reproduce the older tagged `v0.9.1` baseline exactly, check out
-`v0.9.1` instead of latest `main`.
+To reproduce a tagged release exactly, check out that tag instead of latest
+`main`.
 
 Check service status and recent logs:
 
@@ -259,8 +259,8 @@ For `develop` soak tests, also review adaptive cooling:
 - urgent overheating: fans and windows both used
 - stale outside temperature: fallback to legacy cooling
 
-This does not apply to the `v0.9.1` baseline unless the adaptive cooling work
-has been merged into the tested branch.
+This does not apply to stable releases unless the adaptive cooling work has
+been merged into the tested branch.
 
 ## Warning Signs
 
@@ -290,6 +290,5 @@ The analysis report should include:
 - behavior that did not match expectations
 - tuning recommendations
 - bug fixes or follow-up tests
-- recommendation: keep testing, patch release candidate, or promote toward
-  `v1.0.0`
+- recommendation: keep testing, patch the branch, or promote/tag the release
 

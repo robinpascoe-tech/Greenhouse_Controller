@@ -63,8 +63,8 @@ cd /home/pi/Greenhouse_Controller
 
 Repository: [robinpascoe-tech/Greenhouse_Controller](https://github.com/robinpascoe-tech/Greenhouse_Controller)
 
-For release-candidate greenhouse testing, use the latest `main` branch unless
-you intentionally want to reproduce an older tagged release:
+For a stable greenhouse deployment, use the latest `main` branch unless you
+intentionally want to reproduce a specific tagged release:
 
 ```bash
 git fetch --all --tags
