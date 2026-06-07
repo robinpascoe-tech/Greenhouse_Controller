@@ -14,12 +14,12 @@ core product, not as incidental implementation detail.
 
 ## Branches And Release State
 
-- `main` is the stable release-candidate baseline for field soak testing.
-- `develop` is the active development branch.
-- `v0.9.0` is the initial release-candidate tag.
-- The first real greenhouse soak test should use `main` / the stable baseline.
-- Smarter controller work, including outside-aware cooling, lives on `develop`
-  unless merged later.
+- `main` is the stable release branch.
+- `develop` is the active development branch for new controller behavior.
+- `v1.0.0` is the first field-tested stable release.
+- `v0.9.1` and `v0.9.0` are older release-candidate tags kept for comparison.
+- Smarter controller work, including outside-aware cooling and expanded sensor
+  diagnostics, lives on `develop` unless merged later.
 
 Do not move existing release tags unless explicitly asked.
 
@@ -30,6 +30,7 @@ Do not move existing release tags unless explicitly asked.
 - `docs/ENGINEERING_OVERVIEW.md`: system architecture and control behavior.
 - `docs/ROADMAP.md`: future development plan.
 - `docs/SOAK_TEST_PROTOCOL.md`: field-test collection and analysis protocol.
+- `docs/RELEASE_NOTES.md`: stable release notes.
 - `CONTRIBUTING.md`: contribution and license expectations.
 
 ## Runtime Files
@@ -58,7 +59,8 @@ different safety design:
 - Emergency shutdown turns heater/fans off, closes windows, calls GPIO cleanup,
   and exits.
 - `SIGTERM` and `KeyboardInterrupt` route through safe shutdown.
-- Missing or stale inside temperature data triggers emergency shutdown.
+- Missing or stale inside temperature data triggers emergency shutdown after
+  one recent-reading grace controller loop.
 - Startup repairs missing singleton `status` and `overrides` rows.
 - Manual fan/window overrides bypass short-cycle protection but still record
   actuator movement.
@@ -111,6 +113,10 @@ Default runtime paths:
 - config: `/home/pi/Greenhouse_Controller/greenhouse.conf`
 - controller log: `/home/pi/Greenhouse_Controller/thermostat.log`
 
+Prefer native OpenSSH with the `greenhouse-pi` host alias when available. For
+multi-command Pi work, copy a script with `scp` and run it with `ssh` instead of
+packing complex shell logic into one remote command.
+
 Do not commit `greenhouse.conf`, database passwords, SSH passwords, SQL dumps
 with secrets, local bundle backups, or live logs unless the user explicitly
 sanitizes and requests it.
@@ -162,4 +168,3 @@ greenhouse-aware behavior:
 - broader simulation and hardware integration testing
 
 Before starting new work, check `docs/ROADMAP.md` and the latest Git commits.
-

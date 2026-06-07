@@ -151,6 +151,10 @@ ON DUPLICATE KEY UPDATE
 --
 -- Manual fan/window overrides. A row with id=1 is treated as the singleton
 -- control row by greenhouse_controller.py.
+-- Override values are tri-state:
+--   1 = force on/open until expiration
+--   0 = automatic control / no active override
+--  -1 = force off/closed until expiration
 --
 
 CREATE TABLE IF NOT EXISTS `overrides` (
@@ -192,10 +196,10 @@ CREATE TABLE IF NOT EXISTS `settings` (
 INSERT INTO `settings`
   (`id`, `hightemp`, `lowtemp`, `hightemprange`, `lowtemprange`, `windowtemp`, `windowtemprange`, `starttime`, `endtime`, `circfan`)
 VALUES
-  (1, 40.00, 2.00, 4.00, 2.00, 39.00, 5.00, '00:00:00', '08:00:59', 1),
-  (2, 40.00, 2.00, 4.00, 2.00, 39.00, 6.00, '08:01:00', '16:00:59', 0),
-  (3, 40.00, 2.00, 4.00, 2.00, 39.00, 6.00, '16:01:00', '20:00:59', 1),
-  (4, 40.00, 2.00, 4.00, 2.00, 39.00, 5.00, '20:01:00', '23:59:59', 1)
+  (1, 36.00, 6.00, 4.00, 2.00, 38.00, 5.00, '00:00:00', '08:00:59', 0),
+  (2, 35.00, 6.00, 4.00, 2.00, 28.00, 6.00, '08:01:00', '17:00:59', 1),
+  (3, 36.00, 6.00, 4.00, 2.00, 32.00, 6.00, '17:01:00', '20:00:59', 0),
+  (4, 36.00, 6.00, 4.00, 2.00, 38.00, 5.00, '20:01:00', '23:59:59', 0)
 ON DUPLICATE KEY UPDATE
   `id` = VALUES(`id`);
 

@@ -16,17 +16,20 @@ $fanstatus          = isset($_POST['fanstatus']) ? (int) $_POST['fanstatus'] : 0
 $isformerror = 0;
 $formerror = "";
 
-// Friendly status names
-if ($windowstatus == 0) {
+if ($windowstatus == -1) {
     $windowstatusname = 'Closed';
-} else {
+} elseif ($windowstatus == 1) {
     $windowstatusname = 'Open';
+} else {
+    $windowstatusname = 'Automatic';
 }
 
-if ($fanstatus == 0) {
+if ($fanstatus == -1) {
     $fanstatusname = 'Off';
-} else {
+} elseif ($fanstatus == 1) {
     $fanstatusname = 'On';
+} else {
+    $fanstatusname = 'Automatic';
 }
 
 // Variables used later for confirmation display

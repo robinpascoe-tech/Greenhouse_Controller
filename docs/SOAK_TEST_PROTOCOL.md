@@ -2,22 +2,25 @@
 
 This protocol describes how to run and collect evidence from a multi-day
 greenhouse controller soak test. The goal is to compare real greenhouse
-operation against expected controller behavior before promoting a release
-candidate.
+operation against expected controller behavior before promoting a release or
+validating a development branch.
 
 ## Recommended Test Order
 
-Run the first real greenhouse soak test from `main` at the `v0.9.0` tag. This
-keeps the first field test focused on the stable release candidate.
+For release validation, run the real greenhouse soak test from latest `main`.
+This keeps the field test focused on the stable branch while including the
+timestamp, override, dashboard, default-schedule, sensor freshness, and
+sensor-health fixes that were validated for `v1.0.0`.
 
-After the baseline is understood, run a separate soak test from `develop` to
-evaluate newer behavior such as outside-temperature-aware cooling.
+After the stable baseline is understood, run a separate soak test from
+`develop` to evaluate newer behavior such as outside-temperature-aware cooling
+and expanded sensor diagnostics.
 
 Suggested sequence:
 
-1. Soak test `main` / `v0.9.0` for several days.
+1. Soak test latest `main` for several days.
 2. Analyze logs, SQL history, and field notes.
-3. Fix any release-candidate issues or promote a stable release.
+3. Fix any release issues or promote/tag the stable release.
 4. Soak test `develop` as the next smarter-controller candidate.
 
 ## Test Duration
@@ -46,14 +49,24 @@ git rev-parse HEAD
 git describe --tags --always
 ```
 
-For a `v0.9.0` baseline soak:
+For a stable-branch soak:
 
 ```bash
 git fetch --all --tags
 git switch main
 git pull --ff-only
-git checkout v0.9.0
 ```
+
+For a development soak:
+
+```bash
+git fetch --all --tags
+git switch develop
+git pull --ff-only
+```
+
+To reproduce a tagged release exactly, check out that tag instead of latest
+`main`.
 
 Check service status and recent logs:
 
@@ -71,13 +84,22 @@ python3 -m py_compile scripts/*.py tools/*.py
 Optional bench checks before connecting to the greenhouse:
 
 ```bash
+export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
+python3 tools/simulation_harness.py
+```
+
+The simulation harness records GPIO calls instead of moving real relays.
+
+For guarded Raspberry Pi GPIO validation on `develop`, only when safe:
+
+```bash
 export GREENHOUSE_ALLOW_REAL_GPIO_TEST=1
 export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
 python3 tools/gpio_integration_test.py
 ```
 
-Only run the GPIO integration test when it is safe for the configured GPIO pins
-to energize.
+The GPIO integration test drives real GPIO pins. Do not run it unless it is
+safe for the configured GPIO pins to energize.
 
 ## During The Test
 
@@ -143,7 +165,7 @@ journalctl -u greenhouse-controller --since "4 days ago" \
 Collect database export:
 
 ```bash
-mysqldump greenhouse \
+mysqldump --single-transaction --skip-lock-tables greenhouse \
   currenttemp \
   status \
   status_log \
@@ -218,6 +240,7 @@ Evaluate greenhouse thermal behavior after actuator changes:
 Review sensor reliability:
 
 - stale inside sensor readings
+- recent-but-stale grace events
 - fallback from `AverageInsideTemp` to `FrontTemp` or `BackTemp`
 - stale or missing `OutsideTemp`
 - DS18B20 sentinel values such as `85.0 C` or `-127.0 C`
@@ -226,6 +249,9 @@ Review sensor reliability:
 - flatline readings
 - noisy or drifting sensors
 - sensor-health alerts and cooldown behavior
+- environmental trend notes that prevent normal greenhouse ramps from being
+  marked as degradation
+- peer outlier detection if three or more comparable inside-air sensors exist
 
 ### Safety And Failure Handling
 
@@ -251,8 +277,8 @@ For `develop` soak tests, also review adaptive cooling:
 - urgent overheating: fans and windows both used
 - stale outside temperature: fallback to legacy cooling
 
-This does not apply to the `v0.9.0` baseline unless the adaptive cooling work
-has been merged into the tested branch.
+This does not apply to stable releases unless the adaptive cooling work has
+been merged into the tested branch.
 
 ## Warning Signs
 
@@ -262,7 +288,7 @@ Investigate before promoting a release if any of these appear:
 - heater runs but temperature continues falling for a long period
 - fans/windows cause large overcooling events
 - repeated dynamic hysteresis warnings
-- repeated sensor fallback or stale sensor warnings
+- repeated sensor fallback or recent-but-stale grace warnings
 - emergency shutdown during normal conditions
 - MariaDB connection failures outside deliberate testing
 - windows fail to close at shutdown
@@ -282,6 +308,4 @@ The analysis report should include:
 - behavior that did not match expectations
 - tuning recommendations
 - bug fixes or follow-up tests
-- recommendation: keep testing, patch release candidate, or promote toward
-  `v1.0.0`
-
+- recommendation: keep testing, patch the branch, or promote/tag the release

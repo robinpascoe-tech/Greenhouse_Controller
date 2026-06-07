@@ -63,6 +63,15 @@ cd /home/pi/Greenhouse_Controller
 
 Repository: [robinpascoe-tech/Greenhouse_Controller](https://github.com/robinpascoe-tech/Greenhouse_Controller)
 
+For a stable greenhouse deployment, use the latest `main` branch unless you
+intentionally want to reproduce a specific tagged release:
+
+```bash
+git fetch --all --tags
+git switch main
+git pull --ff-only
+```
+
 If you use a different path, update:
 
 - `config/greenhouse-controller.service.example`
@@ -266,6 +275,12 @@ Sensor reading should run frequently, for example every minute:
 * * * * * /usr/bin/python3 /home/pi/Greenhouse_Controller/scripts/read_sensors.py
 ```
 
+For fresher readings, a second offset run can be added:
+
+```cron
+* * * * * sleep 30; /usr/bin/python3 /home/pi/Greenhouse_Controller/scripts/read_sensors.py
+```
+
 Sensor health can run less often:
 
 ```cron
@@ -328,3 +343,41 @@ Inspect GPIO state without changing outputs:
 ```bash
 python3 tools/gpio_monitor.py
 ```
+
+## 12. Legacy PHP Dashboard Credentials
+
+The files in `html/` are the legacy PHP dashboard. The tracked
+`html/dbconnect.php` file intentionally does not contain a real password.
+
+On a live Pi, create `/var/www/html/dbconnect.local.php` after copying the
+dashboard files:
+
+```php
+<?php
+$db_host = 'localhost';
+$db_user = 'greenhouse_app';
+$db_password = 'your_database_password';
+$db_name = 'greenhouse';
+?>
+```
+
+Then secure it:
+
+```bash
+sudo chown www-data:www-data /var/www/html/dbconnect.local.php
+sudo chmod 640 /var/www/html/dbconnect.local.php
+```
+
+`dbconnect.local.php` is ignored by Git so future repository updates do not
+publish or overwrite live database credentials.
+
+After `dbconnect.local.php` exists, deploy dashboard updates with:
+
+```bash
+cd /home/pi/Greenhouse_Controller
+tools/deploy_dashboard.sh
+```
+
+The deploy script backs up the current web root, copies `html/` to
+`/var/www/html`, restores `dbconnect.local.php`, fixes ownership, and checks the
+main dashboard endpoints.

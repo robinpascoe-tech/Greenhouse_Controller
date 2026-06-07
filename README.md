@@ -19,8 +19,10 @@ greenhouse automation systems.
 - Uses SQL-driven day schedules for temperature thresholds.
 - Supports temporary fan and window overrides.
 - Adds short-cycle protection and dynamic hysteresis widening.
-- Detects stale sensors and fails safe.
-- Scores sensor health and detects degradation/failure patterns.
+- Detects stale sensors, allows one short grace cycle for delayed readings, and
+  then fails safe.
+- Scores sensor health with peer/environment context and detects
+  degradation/failure patterns.
 - Provides a simulation harness for testing controller behavior without moving
   real relays.
 
@@ -103,6 +105,7 @@ docs/
   INSTALL.md                 Installation guide.
   ENGINEERING_OVERVIEW.md    System architecture and behavior notes.
   ROADMAP.md                 Future development roadmap.
+  RELEASE_NOTES.md           Release highlights and known notes.
   SOAK_TEST_PROTOCOL.md      Field soak-test collection and analysis guide.
 
 html/
@@ -235,6 +238,8 @@ The harness covers scenarios such as:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health greenhouse ramp context
+- sensor-health peer outlier detection
 - sensor-health persistent CRC instability
 
 For Raspberry Pi GPIO integration testing, use the guarded hardware test. It
@@ -249,6 +254,18 @@ python3 tools/gpio_integration_test.py
 
 Only run this when it is safe for the Pi GPIO pins to energize.
 
+## Current Stable Release
+
+`main` contains the stable controller baseline. `v1.0.0` is the first
+field-tested stable release, promoted after multi-day greenhouse soak testing
+confirmed safe shutdown, restart recovery, sensor freshness handling, scheduled
+circulation fan behavior, window/fan cooling behavior, database logging, and
+dashboard compatibility.
+
+Future controller changes should normally be developed on `develop`, soak
+tested separately, and merged back to `main` only after they are ready for the
+next stable release.
+
 ## Legacy Dashboard
 
 The `html/` directory contains legacy PHP dashboard files from the original
@@ -260,9 +277,6 @@ files on a public or production system.
 
 ## Known Limitations
 
-- Real-world greenhouse soak testing is still in progress. Treat the current
-  release as a release candidate until it has run through several days of live
-  weather and actuator behavior.
 - Sensor IDs, GPIO pins, relay behavior, motor timing, and SQL schedules are
   installation-specific and must be reviewed before use on different hardware.
 - The simulation harness verifies controller logic, but it cannot prove relay
@@ -270,6 +284,8 @@ files on a public or production system.
   greenhouse.
 - The legacy dashboard is included for reference and has not yet been modernized
   to the same standard as the Python controller.
+- DS18B20 sensor quality varies. The controller records CRC and diagnostic
+  history, but users should still validate and periodically inspect sensors.
 - Wiring diagrams and deployment examples are planned but not included yet.
 
 ## Contributing
@@ -309,9 +325,9 @@ possible.
 
 ## Project Status
 
-This project is being prepared as a `v0.9.0` release candidate for public use
-and review. It began as a real greenhouse controller and still contains some
-legacy material alongside the newer refactored Python scripts.
+This project is ready for public use and review as a field-tested Raspberry Pi
+greenhouse controller. It began as a real greenhouse controller and still
+contains some legacy material alongside the newer refactored Python scripts.
 
 Expect to review configuration, GPIO assignments, sensor IDs, and SQL passwords
 before using it in your own greenhouse.

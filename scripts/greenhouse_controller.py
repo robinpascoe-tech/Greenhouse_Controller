@@ -86,7 +86,13 @@ LOG_FILENAME = "/home/pi/Greenhouse_Controller/thermostat.log"
 logger = logging.getLogger("GreenhouseController")
 logger.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter("%(asctime)s %(levelname)-8s %(message)s")
+class UTCFormatter(logging.Formatter):
+    """Format log timestamps in UTC to match database timestamps."""
+
+    converter = time.gmtime
+
+
+formatter = UTCFormatter("%(asctime)sZ %(levelname)-8s %(message)s")
 
 # Also log warnings/errors to stderr for journalctl/systemd visibility.
 stream_handler = logging.StreamHandler()
@@ -268,6 +274,17 @@ def coerce_time(value):
     return datetime.strptime(str(value), "%H:%M:%S").time()
 
 
+def utc_now():
+    """
+    Return naive UTC for MySQL DATETIME columns.
+
+    The project stores DB timestamps in UTC. MySQL DATETIME does not preserve
+    timezone metadata, so values are written as naive UTC and parsed back as UTC.
+    """
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 # ================================================================
 # DATABASE HELPERS
 # ================================================================
@@ -309,6 +326,7 @@ def get_db_connection():
         database=DB_NAME,
         connect_timeout=5,
         autocommit=False,
+        init_command="SET time_zone = '+00:00'",
     )
 
 
@@ -412,14 +430,15 @@ def log_status_if_changed():
             cur.execute(
                 """
                 INSERT INTO status_log
-                (heater, fan, circfan, window)
-                VALUES (%s, %s, %s, %s)
+                (heater, fan, circfan, window, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
                     current["heater"],
                     current["fan"],
                     current["circfan"],
                     current["window"],
+                    utc_now(),
                 ),
             )
 
@@ -926,7 +945,14 @@ def get_schedule_settings():
 
 @db_retry()
 def get_override_settings():
-    """Return active window/fan override flags if unexpired."""
+    """
+    Return active window/fan override actions if unexpired.
+
+    Override values are intentionally tri-state:
+    -  1: force on/open
+    -  0: automatic control
+    - -1: force off/closed
+    """
 
     con = None
 
@@ -950,8 +976,8 @@ def get_override_settings():
         if not row:
             logger.warning("No overrides row found; assuming no active overrides.")
             return {
-                "window": False,
-                "fan": False,
+                "window": 0,
+                "fan": 0,
             }
 
         now = datetime.now(timezone.utc)
@@ -959,9 +985,25 @@ def get_override_settings():
         window_expire = parse_db_datetime(row[1])
         fan_expire = parse_db_datetime(row[3])
 
+        def active_action(raw_value, expires_at, name):
+            action = int(raw_value)
+
+            if action not in (-1, 0, 1):
+                logger.warning(
+                    "Ignoring invalid %s override value: %s",
+                    name,
+                    raw_value,
+                )
+                return 0
+
+            if action == 0 or now >= expires_at:
+                return 0
+
+            return action
+
         return {
-            "window": int(row[0]) == 1 and now < window_expire,
-            "fan": int(row[2]) == 1 and now < fan_expire,
+            "window": active_action(row[0], window_expire, "window"),
+            "fan": active_action(row[2], fan_expire, "fan"),
         }
 
     finally:
@@ -1055,8 +1097,11 @@ def decide_heater_state(current_temp, low_temp, effective_range):
 def decide_fan_state(current_temp, high_temp, effective_range, override):
     """Return ventilation fan decision from override and high-temperature hysteresis."""
 
-    if override:
-        return ActuatorDecision(True, bypass_protection=True, reason="override")
+    if override == 1:
+        return ActuatorDecision(True, bypass_protection=True, reason="override_on")
+
+    if override == -1:
+        return ActuatorDecision(False, bypass_protection=True, reason="override_off")
 
     lower, upper = hysteresis_bounds(high_temp, effective_range)
 
@@ -1072,8 +1117,11 @@ def decide_fan_state(current_temp, high_temp, effective_range, override):
 def decide_window_state(current_temp, target_temp, effective_range, override):
     """Return window decision from override and window-temperature hysteresis."""
 
-    if override:
-        return ActuatorDecision(True, bypass_protection=True, reason="override")
+    if override == 1:
+        return ActuatorDecision(True, bypass_protection=True, reason="override_open")
+
+    if override == -1:
+        return ActuatorDecision(False, bypass_protection=True, reason="override_closed")
 
     lower, upper = hysteresis_bounds(target_temp, effective_range)
 
@@ -1119,7 +1167,7 @@ def decide_cooling_strategy(
         window_override,
     )
 
-    if fan_override or window_override:
+    if fan_override != 0 or window_override != 0:
         return CoolingDecision(fan, window, "override")
 
     if outside_temp is None:
@@ -1239,8 +1287,13 @@ def ventilation_control(current_temp, high_temp, high_range, override):
     """
     Ventilation fan hysteresis with override and short-cycle protection.
 
-    Operator override intentionally bypasses short-cycle protection but still
-    records the actuator transition.
+    override uses tri-state semantics:
+    -  1: force fans on
+    -  0: automatic control
+    - -1: force fans off
+
+    Operator overrides intentionally bypass short-cycle protection but still
+    record actuator transitions.
     """
 
     effective_range = dynamic_hysteresis_range("fan", high_range)
@@ -1283,8 +1336,13 @@ def window_control(current_temp, target_temp, temp_range, override):
     """
     Window hysteresis with cooldown and reversal lockout.
 
-    Operator override intentionally bypasses window short-cycle and reversal
-    protection but still records the movement.
+    override uses tri-state semantics:
+    -  1: force windows open
+    -  0: automatic control
+    - -1: force windows closed
+
+    Operator overrides intentionally bypass window short-cycle and reversal
+    protection but still record movements.
     """
 
     effective_range = dynamic_hysteresis_range("window", temp_range)

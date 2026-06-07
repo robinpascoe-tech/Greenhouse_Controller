@@ -43,6 +43,7 @@ config/
 docs/
   INSTALL.md
   ENGINEERING_OVERVIEW.md
+  SOAK_TEST_PROTOCOL.md
 
 html/
   Legacy PHP dashboard files.
@@ -63,9 +64,21 @@ archive/
    `overrides`, and drives GPIO outputs.
 5. The controller updates `status` as actuator states change.
 6. When `status` changes, the controller appends a row to `status_log`.
-7. `sensor_health.py` runs periodically, reads `sensor_diagnostics`, writes
-   health snapshots to `sensor_health`, stores smoothing state in
-   `sensor_state`, and records alerts in `sensor_alerts`.
+7. `sensor_health.py` runs periodically, reads `sensor_diagnostics`, applies
+   sensor profile and peer/environment context, writes health snapshots to
+   `sensor_health`, stores smoothing state in `sensor_state`, and records
+   alerts in `sensor_alerts`.
+
+## Time Handling
+
+Database and application log timestamps are written in UTC. MariaDB sessions
+opened by the Python scripts set `time_zone` to `+00:00`, and Python-written
+`DATETIME` values are stored as naive UTC because MySQL/MariaDB `DATETIME`
+columns do not retain timezone metadata.
+
+The daily schedule in `settings` is the exception: schedule selection uses the
+Raspberry Pi's local wall-clock time because those rows describe local
+greenhouse operating periods.
 
 ## Database Tables
 
@@ -76,6 +89,9 @@ archive/
 `settings`
 : Time-of-day temperature schedule. Each row includes high/low thresholds,
   hysteresis ranges, window thresholds, and circulation fan state.
+  Fresh installs use conservative plant-protection defaults based on the
+  v1.0.0 field-tested schedule: `lowtemp` defaults to `6 C`, daytime ventilation
+  starts around `35 C`, and daytime window cooling starts around `28 C`.
 
 `overrides`
 : Singleton row used for temporary manual fan and window overrides. Overrides
@@ -106,16 +122,22 @@ archive/
 
 ## Temperature Selection
 
-The main controller intentionally ignores stale readings. A sensor row is usable
-only if its timestamp is recent enough. The priority order is:
+The main controller intentionally rejects stale readings. Under normal
+conditions a sensor row is usable only if it is no more than 90 seconds old.
+The priority order is:
 
 1. `AverageInsideTemp`
 2. `FrontTemp`
 3. `BackTemp`
 
-If none of those readings are fresh, the controller enters emergency shutdown:
-fans and heater are turned off, windows are closed, GPIO cleanup is called, and
-the process exits.
+If no preferred sensor is fresh, the controller allows one grace loop using a
+recent reading up to 120 seconds old. This avoids a shutdown from a single
+slightly delayed cron run while still preserving fail-safe behavior if
+`read_sensors.py` stops updating `currenttemp`.
+
+If no preferred sensor is fresh or recent enough after that grace loop, the
+controller enters emergency shutdown: fans and heater are turned off, windows
+are closed, GPIO cleanup is called, and the process exits.
 
 Outside temperature is optional context for adaptive cooling decisions. If
 `OutsideTemp` is missing or stale, the controller falls back to the original
@@ -144,6 +166,9 @@ turn off when current_temp >= lowtemp + (lowtemprange / 2)
 
 Short-cycle protection enforces minimum on/off durations before state changes.
 
+Fresh installs default `lowtemp` to `6 C`, which is intended as a safer
+plant-protection baseline than the older empty-greenhouse test value of `2 C`.
+
 ### Ventilation Fans
 
 Ventilation fans use high-temperature hysteresis:
@@ -154,7 +179,7 @@ turn off when current_temp <= hightemp - (hightemprange / 2)
 ```
 
 The controller starts the main fan, waits briefly, then starts the auxiliary
-fan. Overrides can force the fans on until the override expiration time.
+fan. Overrides can force the fans on or off until the override expiration time.
 
 When fresh outside temperature is available, fan decisions are coordinated with
 window decisions. In very cold outside conditions, the controller prefers fans
@@ -178,9 +203,21 @@ Window movement includes relay timing for the rear window and roof window. A
 direction reversal lockout protects motors and relays from rapid open/close
 direction changes.
 
-Window overrides still force windows open until expiration. Manual overrides
-intentionally bypass the adaptive cooling preference because they represent an
-operator command.
+Window and fan overrides are tri-state:
+
+```text
+ 1 = force on/open until expiration
+ 0 = automatic control / no active override
+-1 = force off/closed until expiration
+```
+
+Canceling an override sets the value back to automatic control. It does not
+mean "force the opposite direction"; use a close/off override when an immediate
+manual close/off action is intended.
+
+Manual overrides intentionally bypass adaptive cooling preference and
+short-cycle protection because they represent an operator command. They still
+record actuator movement.
 
 ## Short-Cycle Protection
 
@@ -207,7 +244,8 @@ The controller is fail-safe oriented:
 - `SIGTERM` and `KeyboardInterrupt` route through emergency shutdown.
 - Emergency shutdown turns off heater/fans, closes windows, calls GPIO cleanup,
   and exits.
-- Missing or stale inside sensor data causes emergency shutdown.
+- Missing or stale inside sensor data causes emergency shutdown after the
+  one-loop recent-reading grace period.
 - Missing `status` or `overrides` singleton rows are repaired at startup.
 
 ## Sensor Health
@@ -291,6 +329,8 @@ The harness currently exercises:
 - strict SQL mode
 - DS18B20 sentinel values
 - alert cooldown behavior
+- sensor-health greenhouse ramp context
+- sensor-health peer outlier detection with three or more comparable sensors
 - sensor-health persistent CRC instability even when the current hour is clean
 
 The harness needs admin database permissions because it creates and drops a

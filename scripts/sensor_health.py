@@ -7,6 +7,7 @@ This version focuses on:
 - Restoring operational alerting
 - Preventing status oscillation (hysteresis)
 - Unifying decision logic with sensor profiles
+- Adding peer/environment context for normal greenhouse temperature gradients
 - Tracking persistent CRC instability separately from temperature plausibility
 - Improving maintainability and debugging clarity
 
@@ -56,7 +57,6 @@ PEER_OUTLIER_MAD_MULTIPLIER = 4.0
 
 CRC_PERSISTENT_WARNING_RATE = 0.05
 CRC_PERSISTENT_SEVERE_RATE = 0.15
-
 
 # ============================================================
 # DATABASE CONNECTION
