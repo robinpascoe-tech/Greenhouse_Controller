@@ -219,6 +219,22 @@ rolling time windows.
 Add Raspberry Pi platform reliability features so the controller can recover
 from common unattended-field failures.
 
+Controller startup sensor wait:
+
+- On controller startup, if inside temperature rows are missing or stale, wait
+  briefly for `read_sensors.py` to populate fresh readings before entering the
+  normal control loop.
+- Keep this startup wait bounded, for example 60-90 seconds, so a real sensor
+  reader failure still triggers fail-safe shutdown.
+- Log the wait clearly so soak-test analysis can distinguish expected startup
+  synchronization from runtime stale-sensor problems.
+- Do not weaken normal runtime stale-sensor safety behavior. Once the
+  controller has started successfully, missing or stale inside readings should
+  still lead to the existing recent-reading grace path and then emergency
+  shutdown.
+- Consider making the startup wait configurable in `greenhouse.conf` for
+  installations with different cron/timer schedules.
+
 Watchdog integration:
 
 - Enable and document the Raspberry Pi/Linux hardware watchdog.
