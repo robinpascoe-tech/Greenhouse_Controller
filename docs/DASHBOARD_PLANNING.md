@@ -54,6 +54,13 @@ The desktop layout should show the current operating picture at a glance:
 - scrolling control/event history
 - sensor health summary
 
+Temperature displays should preserve the useful gauge concept from the legacy
+PHP dashboard where practical. A modernized gauge should show the current
+temperature as both a needle/arc position and a numeric value, with visible
+bands for normal, warning, and extreme ranges. This is especially useful for
+quick operator scanning because it shows both the exact value and how close the
+greenhouse is to a concerning range.
+
 Modules should update automatically without requiring a manual page refresh.
 The dashboard should clearly indicate if live updates stop or data becomes
 stale.
@@ -62,6 +69,11 @@ Tablet and phone layouts should be responsive, not just scaled-down desktop
 views. A phone does not need to show every module at once. The mobile view
 should prioritize current temperature, actuator state, active overrides,
 freshness warnings, and links to deeper detail pages.
+
+On mobile, compact temperature gauges or simplified gauge cards are preferred
+over dense tables when screen space allows. The mobile layout can show fewer
+gauges at once, but the primary temperature readings should still make the
+normal/warning/extreme context clear.
 
 The SCADA-style desktop view should be optimized around common 16:10 and 16:9
 monitor aspect ratios, rather than a fixed pixel resolution. It should work on
