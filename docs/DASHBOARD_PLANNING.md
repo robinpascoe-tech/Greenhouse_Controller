@@ -327,6 +327,13 @@ For the first prototype, the preferred direction is a dashboard-native
 Cacti image links or wrapper pages for the graph-focused pages. This keeps the
 main view portable while still preserving Cacti for historical graphing.
 
+The dashboard-native graph should use a small self-hosted JavaScript charting
+library fed by a Flask JSON endpoint. This keeps the Flask app simple, avoids a
+server-side image-generation dependency, and lets the browser handle frequent
+auto-updates. A lightweight time-series library such as uPlot is a good fit; a
+more common library such as Chart.js would also work if contributor familiarity
+matters more than minimizing JavaScript size.
+
 Because Cacti graph locations can differ by installation, embedded Cacti graph
 URLs should be configurable. They should not be hard-coded into templates.
 
@@ -422,6 +429,12 @@ operators room to customize the greenhouse for different crops, seasons, and
 operating styles. Borderline values can produce warnings, while values that
 make the heating and cooling logic fight each other should be blocked.
 
+Project default schedule values should remain in the SQL schema used for new
+installs. The dashboard should not become a second source of default truth.
+Once schedule editing exists, the dashboard may offer a "reset to project
+defaults" helper, but that helper should read from a documented defaults source
+or shared migration data rather than carrying unrelated hard-coded values.
+
 Window and ventilation fan overrides need less validation than schedules.
 Overrides are often used for a specific operator need, so validation should
 focus on valid states, reasonable expiration times, and clear operator feedback
@@ -476,9 +489,5 @@ Cacti and the legacy PHP dashboard available during transition.
 
 ## Open Questions
 
-- Should the dashboard-native 30-minute graph use a small JavaScript charting
-  library or server-rendered image generation?
 - Should embedded Cacti graph pages use direct graph image links alone, or
   small wrapper pages that keep the dashboard navigation consistent?
-- What specific schedule values should ship as the default examples after the
-  validation limits are implemented?
