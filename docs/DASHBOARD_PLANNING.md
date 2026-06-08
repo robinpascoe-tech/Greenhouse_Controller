@@ -14,6 +14,8 @@ long-term graphing.
 - Keep the Raspberry Pi lightweight and reliable.
 - Preserve nginx and Cacti.
 - Avoid disturbing controller soak tests while planning.
+- Use responsive design so the dashboard works well on a phone, tablet, or
+  computer screen.
 - Show live greenhouse state clearly.
 - Keep manual controls understandable and safe.
 - Make sensor health, actuator history, and alerts easier to interpret.
@@ -34,6 +36,51 @@ long-term graphing.
 - Soak-test notes and maintenance annotations.
 - Configuration review page for paths, sensor names, GPIO pins, and SQL
   schedule values.
+
+## Display Modes
+
+The primary desktop view should feel closer to a small SCADA display than a
+traditional web page. It should be suitable for leaving open on a computer
+screen in the greenhouse or nearby work area.
+
+The desktop layout should show the current operating picture at a glance:
+
+- sensor readings with freshness and trend indicators
+- actuator status for heater, ventilation fan, circulation fan, and windows
+- time each actuator has been in its current state
+- recent temperature graph
+- current schedule period and active thresholds
+- active overrides and expiration times
+- scrolling control/event history
+- sensor health summary
+
+Modules should update automatically without requiring a manual page refresh.
+The dashboard should clearly indicate if live updates stop or data becomes
+stale.
+
+Tablet and phone layouts should be responsive, not just scaled-down desktop
+views. A phone does not need to show every module at once. The mobile view
+should prioritize current temperature, actuator state, active overrides,
+freshness warnings, and links to deeper detail pages.
+
+## Prototype Scope
+
+The first prototype should be read-only. Schedule changes and manual overrides
+can remain in the legacy PHP interface while the new dashboard proves itself.
+
+The read-only prototype should focus on:
+
+- current state
+- recent trends
+- current schedule values
+- active overrides
+- control/event history
+- sensor health
+- links or selected embeds for Cacti graphs
+
+Manual control writes should be added only after authentication, CSRF
+protection, clear confirmation states, and safe override semantics are designed
+and tested.
 
 ## Architecture Options
 
@@ -243,13 +290,70 @@ Possible integration approaches:
 
 - Link to Cacti pages from the new dashboard.
 - Keep existing Cacti graph PHP pages for temperature/operation graph groups.
-- Embed selected Cacti graph images or pages in dashboard panels if the paths
-  are stable.
+- Embed selected Cacti graph images or pages on graph-focused dashboard pages
+  if the paths are stable.
 - Add a "Historical Graphs" section that intentionally hands off to Cacti.
 
 The custom dashboard should focus on live operations, safety, controls, sensor
 health, and interpretation. Cacti should continue doing what it does well:
 long-term graphing.
+
+The main dashboard page should not become crowded with every historical graph.
+It can show a recent compact temperature graph, while deeper graph pages can
+embed selected Cacti views and link to the full Cacti interface.
+
+## Authentication
+
+Local-network-only access may be sufficient for the initial dashboard,
+especially while the first prototype is read-only.
+
+If authentication is added, it should not make routine greenhouse operation
+frustrating. Operators should not need to log in every time they refresh the
+dashboard or reopen it during normal local use. A simple session cookie, HTTP
+basic auth with browser caching, or another lightweight local-friendly approach
+would be preferable to a heavy identity system.
+
+Write actions such as overrides or schedule edits need a higher bar than
+read-only status pages. Those actions should have authentication, CSRF
+protection, and clear operator feedback before they are added to the new
+dashboard.
+
+## Configuration Editing
+
+"Dashboard configuration editing" means allowing the web interface to change
+project settings, such as:
+
+- schedule temperatures and ranges stored in SQL
+- manual override values
+- sensor display names and location labels
+- GPIO pin assignments
+- controller paths and service settings
+- alert thresholds and recipients
+
+These are different risk levels. Schedule values, overrides, and alert
+thresholds are reasonable future dashboard features if protected and tested.
+GPIO pins, file paths, database credentials, and service settings should
+probably stay as file/manual setup tasks for now because mistakes there can
+break the controller or create unsafe actuator behavior.
+
+For the first modern dashboard prototype, configuration editing should be out
+of scope. A read-only configuration review page would still be useful because
+it can show what the controller is currently using without allowing accidental
+changes.
+
+## Soak-Test Support
+
+Future soak-test reports can remain static HTML or markdown artifacts rather
+than becoming normal operator dashboard pages. They are primarily development
+and release-validation tools.
+
+However, the dashboard may eventually include a simple way to record timestamped
+operator notes during a soak test. These notes could capture door openings,
+maintenance, weather observations, manual overrides, or unusual greenhouse
+behavior, and would make later log analysis easier.
+
+Until that feature exists, soak-test notes can continue to be recorded in a
+plain text or markdown file.
 
 ## Recommended Direction
 
@@ -257,7 +361,8 @@ The best next step is probably a staged approach:
 
 1. Keep nginx, Cacti, and the existing PHP dashboard available.
 2. Create a small modern dashboard surface without changing controller logic.
-3. Start with read-only status, temperatures, sensor health, and Cacti links.
+3. Start with a read-only SCADA-style status page for desktop, with responsive
+   tablet and phone layouts.
 4. Add manual override controls only after the read-only dashboard is stable.
 5. Decide between structured PHP and Flask after the first read-only prototype.
 
@@ -276,13 +381,12 @@ without making the Raspberry Pi carry a heavy web stack.
 
 ## Open Questions
 
-- Should the first prototype be read-only?
-- Should manual overrides stay in PHP until the new dashboard has auth/CSRF
-  protection?
-- Should Cacti graphs be embedded or simply linked?
-- Should dashboard authentication be local-network-only, HTTP basic auth, or a
-  simple login?
-- Should dashboard configuration editing be allowed, or should config remain
-  file/SQL/manual for now?
-- Should future soak-test reports be generated as static HTML, a dashboard
-  page, or both?
+- Should the first prototype use structured PHP endpoints or a small Flask app?
+- Should the SCADA-style desktop view be optimized for a specific monitor size,
+  or should it remain fully fluid across common desktop widths?
+- Which Cacti graphs should be embedded on graph-focused pages versus only
+  linked from the dashboard?
+- Is local-network-only access sufficient for read-only views, and what auth
+  model should be used before write actions are added?
+- Which settings, if any, should become editable from the dashboard after the
+  read-only prototype is stable?
