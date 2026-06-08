@@ -63,6 +63,13 @@ views. A phone does not need to show every module at once. The mobile view
 should prioritize current temperature, actuator state, active overrides,
 freshness warnings, and links to deeper detail pages.
 
+The SCADA-style desktop view should be optimized around common 16:10 and 16:9
+monitor aspect ratios, rather than a fixed pixel resolution. It should work on
+ordinary 1080p screens as well as higher-resolution displays such as
+3840x2400. Layouts should use responsive grid sizing, aspect-ratio-aware
+panels, and sensible minimum/maximum widths instead of assuming one exact
+monitor size.
+
 ## Prototype Scope
 
 The first prototype should be read-only. Schedule changes and manual overrides
@@ -294,6 +301,13 @@ Possible integration approaches:
   if the paths are stable.
 - Add a "Historical Graphs" section that intentionally hands off to Cacti.
 
+The expected embedded graph pages are:
+
+- temperature graphs
+- humidity graphs
+- operation/actuator graphs
+- combined temperature and operation graphs
+
 The custom dashboard should focus on live operations, safety, controls, sensor
 health, and interpretation. Cacti should continue doing what it does well:
 long-term graphing.
@@ -307,11 +321,15 @@ embed selected Cacti views and link to the full Cacti interface.
 Local-network-only access may be sufficient for the initial dashboard,
 especially while the first prototype is read-only.
 
-If authentication is added, it should not make routine greenhouse operation
-frustrating. Operators should not need to log in every time they refresh the
-dashboard or reopen it during normal local use. A simple session cookie, HTTP
-basic auth with browser caching, or another lightweight local-friendly approach
-would be preferable to a heavy identity system.
+Local-network-only access is sufficient for read-only views. If authentication
+is added, it should not make routine greenhouse operation frustrating.
+Operators should not need to log in every time they refresh the dashboard or
+reopen it during normal local use.
+
+If Flask is used, the preferred direction is cookie-based session
+authentication with a "remember me" token. If PHP is used, the equivalent
+session-cookie and persistent-login pattern would be preferred. A heavy
+identity system is not needed for the current project scope.
 
 Write actions such as overrides or schedule edits need a higher bar than
 read-only status pages. Those actions should have authentication, CSRF
@@ -335,6 +353,16 @@ thresholds are reasonable future dashboard features if protected and tested.
 GPIO pins, file paths, database credentials, and service settings should
 probably stay as file/manual setup tasks for now because mistakes there can
 break the controller or create unsafe actuator behavior.
+
+The preferred editing roadmap is:
+
+1. schedule editing plus ventilation fan and window overrides
+2. alert thresholds and alert recipients
+3. sensor identification, assignment, and display labels
+
+GPIO assignments, controller paths, and service settings should not be exposed
+through the dashboard at this stage. They may be reconsidered later, but only
+with strong validation and clear recovery behavior.
 
 For the first modern dashboard prototype, configuration editing should be out
 of scope. A read-only configuration review page would still be useful because
@@ -382,11 +410,8 @@ without making the Raspberry Pi carry a heavy web stack.
 ## Open Questions
 
 - Should the first prototype use structured PHP endpoints or a small Flask app?
-- Should the SCADA-style desktop view be optimized for a specific monitor size,
-  or should it remain fully fluid across common desktop widths?
-- Which Cacti graphs should be embedded on graph-focused pages versus only
-  linked from the dashboard?
-- Is local-network-only access sufficient for read-only views, and what auth
-  model should be used before write actions are added?
-- Which settings, if any, should become editable from the dashboard after the
-  read-only prototype is stable?
+- What specific recent graph window should appear on the main SCADA-style page?
+- Should embedded Cacti graph pages use iframes, direct graph image links, or
+  small wrapper pages that keep the dashboard navigation consistent?
+- What validation rules are needed before schedule editing and override writes
+  are added to the modern dashboard?
