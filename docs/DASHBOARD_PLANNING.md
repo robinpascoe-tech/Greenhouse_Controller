@@ -345,9 +345,6 @@ Cacti itself but distracting in the operator dashboard.
 
 ## Authentication
 
-Local-network-only access may be sufficient for the initial dashboard,
-especially while the first prototype is read-only.
-
 Local-network-only access is sufficient for read-only views. If authentication
 is added, it should not make routine greenhouse operation frustrating.
 Operators should not need to log in every time they refresh the dashboard or
@@ -399,9 +396,31 @@ Schedule editing needs validation before it is exposed in the modern dashboard:
 - fan and window setpoints should not be set to extreme values that could leave
   the greenhouse unsafe
 
-The exact sane temperature limits can be refined later. The validation should
-protect against obvious mistakes while still giving operators room to customize
-the greenhouse for different crops, seasons, and operating styles.
+Recommended first-pass schedule limits:
+
+| Setting | Allowed range | Notes |
+| --- | ---: | --- |
+| `lowtemp` | 2 C to 18 C | `6 C` is the safer project default. |
+| `hightemp` | 18 C to 40 C | Allows warm-climate and unusual crop flexibility without permitting extreme values. |
+| `windowtemp` | 18 C to 40 C | Same guardrail as ventilation fan cooling. |
+| `lowtemprange` | 0.5 C to 6 C | Prevents heater hysteresis from becoming too narrow or too wide. |
+| `hightemprange` | 1 C to 8 C | Keeps fan hysteresis useful without allowing large temperature swings. |
+| `windowtemprange` | 1 C to 10 C | Allows wider window hysteresis because windows can have slower physical response and more overshoot. |
+
+Recommended relationship rules:
+
+- `lowtemp` should be at least 3 C below both `hightemp` and `windowtemp`.
+- `lowtemp + lowtemprange` should be at least 2 C below the lower of
+  `hightemp` and `windowtemp`.
+- `hightemp` and `windowtemp` can be close together, but should normally be
+  within 5 C of each other unless the operator intentionally confirms an
+  advanced or unusual setup.
+- Range values must be positive.
+
+The validation should protect against obvious mistakes while still giving
+operators room to customize the greenhouse for different crops, seasons, and
+operating styles. Borderline values can produce warnings, while values that
+make the heating and cooling logic fight each other should be blocked.
 
 Window and ventilation fan overrides need less validation than schedules.
 Overrides are often used for a specific operator need, so validation should
@@ -459,7 +478,7 @@ Cacti and the legacy PHP dashboard available during transition.
 
 - Should the dashboard-native 30-minute graph use a small JavaScript charting
   library or server-rendered image generation?
-- Should embedded Cacti graph pages use iframes, direct graph image links, or
+- Should embedded Cacti graph pages use direct graph image links alone, or
   small wrapper pages that keep the dashboard navigation consistent?
-- What exact temperature and range limits should be considered sane for
-  schedule editing?
+- What specific schedule values should ship as the default examples after the
+  validation limits are implemented?
