@@ -103,6 +103,7 @@ config/
 
 docs/
   INSTALL.md                 Installation guide.
+  DASHBOARD_PLANNING.md      Modern dashboard options and direction.
   ENGINEERING_OVERVIEW.md    System architecture and behavior notes.
   ROADMAP.md                 Future development roadmap.
   RELEASE_NOTES.md           Release highlights and known notes.
@@ -171,6 +172,7 @@ xargs -a apt-packages.txt sudo apt install -y
 Then follow the full guide:
 
 - [Installation Guide](docs/INSTALL.md)
+- [Dashboard Planning](docs/DASHBOARD_PLANNING.md)
 - [Engineering Overview](docs/ENGINEERING_OVERVIEW.md)
 - [Development Roadmap](docs/ROADMAP.md)
 - [Soak Test Protocol](docs/SOAK_TEST_PROTOCOL.md)

@@ -282,6 +282,8 @@ forecast data is unavailable.
 
 Replace or supplement the legacy PHP dashboard with a modern interface.
 
+See `docs/DASHBOARD_PLANNING.md` for architecture options and tradeoffs.
+
 High-value dashboard views:
 
 - current temperatures and recent trends
