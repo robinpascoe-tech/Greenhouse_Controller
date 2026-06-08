@@ -72,8 +72,9 @@ monitor size.
 
 ## Prototype Scope
 
-The first prototype should be read-only. Schedule changes and manual overrides
-can remain in the legacy PHP interface while the new dashboard proves itself.
+The first prototype should be a small read-only Flask app. Schedule changes and
+manual overrides can remain in the legacy PHP interface while the new dashboard
+proves itself.
 
 The read-only prototype should focus on:
 
@@ -308,6 +309,27 @@ The expected embedded graph pages are:
 - operation/actuator graphs
 - combined temperature and operation graphs
 
+The main SCADA-style page should show a recent temperature graph, with a
+30-minute window as the starting target. There are two practical ways to do
+this:
+
+- generate a lightweight 30-minute graph directly from `temperature_log`
+- show a configured Cacti graph image URL for the 30-minute temperature graph
+
+A generated dashboard-native graph is more portable because it does not depend
+on Cacti graph IDs or install-specific paths. It is also easier to make
+auto-update cleanly with the rest of the dashboard. A Cacti graph image is
+better if we want visual consistency with existing historical graphs and want
+to avoid building graphing logic in the dashboard.
+
+For the first prototype, the preferred direction is a dashboard-native
+30-minute temperature graph for the main SCADA-style page, plus configurable
+Cacti image links or wrapper pages for the graph-focused pages. This keeps the
+main view portable while still preserving Cacti for historical graphing.
+
+Because Cacti graph locations can differ by installation, embedded Cacti graph
+URLs should be configurable. They should not be hard-coded into templates.
+
 The custom dashboard should focus on live operations, safety, controls, sensor
 health, and interpretation. Cacti should continue doing what it does well:
 long-term graphing.
@@ -315,6 +337,11 @@ long-term graphing.
 The main dashboard page should not become crowded with every historical graph.
 It can show a recent compact temperature graph, while deeper graph pages can
 embed selected Cacti views and link to the full Cacti interface.
+
+Direct graph image links, or small wrapper pages using direct graph image
+links, are preferred over iframes for embedded dashboard graphs. Iframes are
+more likely to bring in Cacti navigation and graph controls that are useful in
+Cacti itself but distracting in the operator dashboard.
 
 ## Authentication
 
@@ -360,6 +387,27 @@ The preferred editing roadmap is:
 2. alert thresholds and alert recipients
 3. sensor identification, assignment, and display labels
 
+Schedule editing needs validation before it is exposed in the modern dashboard:
+
+- the four schedule periods should be contiguous across the day
+- schedule periods should not overlap
+- each schedule period should have a valid start and end time
+- temperature targets and hysteresis/range values should stay within sane
+  greenhouse operating limits
+- heater/low-temperature settings should not conflict with fan/window cooling
+  settings
+- fan and window setpoints should not be set to extreme values that could leave
+  the greenhouse unsafe
+
+The exact sane temperature limits can be refined later. The validation should
+protect against obvious mistakes while still giving operators room to customize
+the greenhouse for different crops, seasons, and operating styles.
+
+Window and ventilation fan overrides need less validation than schedules.
+Overrides are often used for a specific operator need, so validation should
+focus on valid states, reasonable expiration times, and clear operator feedback
+rather than blocking unusual but intentional actions.
+
 GPIO assignments, controller paths, and service settings should not be exposed
 through the dashboard at this stage. They may be reconsidered later, but only
 with strong validation and clear recovery behavior.
@@ -402,16 +450,16 @@ For a low-risk first prototype, two options stand out:
   if future tools like sensor assignment and soak-test reports become web
   workflows.
 
-My current leaning is Flask for the long-term dashboard, but not as a big
-rewrite. A modest Flask app behind nginx, with Cacti preserved and the legacy
-PHP dashboard still available during transition, gives the project room to grow
-without making the Raspberry Pi carry a heavy web stack.
+The chosen first prototype direction is a small Flask app behind nginx. This
+does not commit the project permanently to Flask; it gives us a practical way
+to evaluate how it looks, runs, and feels on the Raspberry Pi while keeping
+Cacti and the legacy PHP dashboard available during transition.
 
 ## Open Questions
 
-- Should the first prototype use structured PHP endpoints or a small Flask app?
-- What specific recent graph window should appear on the main SCADA-style page?
+- Should the dashboard-native 30-minute graph use a small JavaScript charting
+  library or server-rendered image generation?
 - Should embedded Cacti graph pages use iframes, direct graph image links, or
   small wrapper pages that keep the dashboard navigation consistent?
-- What validation rules are needed before schedule editing and override writes
-  are added to the modern dashboard?
+- What exact temperature and range limits should be considered sane for
+  schedule editing?
