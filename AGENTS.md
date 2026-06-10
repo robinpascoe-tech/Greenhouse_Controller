@@ -43,8 +43,12 @@ Do not move existing release tags unless explicitly asked.
   cleanup.
 - `tools/simulation_harness.py`: deterministic simulation suite using a
   throwaway MariaDB database and fake GPIO.
+- `tools/collect_soak_data.py`: Pi-side soak-test evidence collector.
+- `tools/replay_sensor_health_history.py`: replay sensor-health scoring against
+  historical diagnostic data.
 - `tools/gpio_integration_test.py`: guarded real-GPIO integration test.
 - `tools/gpio_monitor.py`: read-only GPIO state monitor.
+- `tools/deploy_dashboard.sh`: legacy PHP dashboard deployment helper.
 - `sql/schema.sql`: fresh database schema.
 - `sql/migrate_schema.sql`: legacy database migration script.
 

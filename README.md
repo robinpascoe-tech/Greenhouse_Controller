@@ -88,9 +88,13 @@ scripts/
 
 tools/
   simulation_harness.py      Deterministic controller simulation suite.
+  collect_soak_data.py       Pi-side soak-test evidence collector.
+  replay_sensor_health_history.py
+                              Replays sensor-health scoring against history.
   simulate_sensors.py        Fake currenttemp writer for development.
   gpio_monitor.py            Read-only GPIO terminal monitor.
   gpio_integration_test.py   Guarded real-GPIO integration test.
+  deploy_dashboard.sh        Legacy dashboard deployment helper.
 
 sql/
   schema.sql                 Fresh database schema.
@@ -135,6 +139,10 @@ archive/
 `scripts/cleanup_sensor_diagnostics.py`
 : Deletes old raw sensor diagnostic rows. This table grows quickly because every
   sensor read attempt is recorded.
+
+`tools/collect_soak_data.py`
+: Collects soak-test notes, logs, service state, Git metadata, SQL schema files,
+  a database snapshot, and a MariaDB dump into one archive for later analysis.
 
 ## Database
 
@@ -243,6 +251,7 @@ The harness covers scenarios such as:
 - sensor-health greenhouse ramp context
 - sensor-health peer outlier detection
 - sensor-health persistent CRC instability
+- cold-outside woodstove overshoot cooling behavior
 
 For Raspberry Pi GPIO integration testing, use the guarded hardware test. It
 drives the configured GPIO outputs, samples pin state with `pinctrl`, uses a
@@ -255,6 +264,14 @@ python3 tools/gpio_integration_test.py
 ```
 
 Only run this when it is safe for the Pi GPIO pins to energize.
+
+After a field soak test, collect evidence on the Pi with:
+
+```bash
+python3 tools/collect_soak_data.py --since "4 days ago"
+```
+
+The helper prints the generated archive path.
 
 ## Current Stable Release
 

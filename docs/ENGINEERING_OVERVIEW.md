@@ -27,9 +27,13 @@ scripts/
 
 tools/
   simulation_harness.py      Deterministic controller simulation/test harness.
+  collect_soak_data.py       Soak-test evidence collector for the Pi.
+  replay_sensor_health_history.py
+                             Replays health scoring against diagnostic history.
   simulate_sensors.py        Writes fake currenttemp values for development.
   gpio_monitor.py            Read-only terminal GPIO state monitor.
   gpio_integration_test.py   Guarded real-GPIO integration test.
+  deploy_dashboard.sh        Legacy PHP dashboard deployment helper.
 
 sql/
   schema.sql                 Fresh database schema.
@@ -42,7 +46,10 @@ config/
 
 docs/
   INSTALL.md
+  DASHBOARD_PLANNING.md
   ENGINEERING_OVERVIEW.md
+  ROADMAP.md
+  RELEASE_NOTES.md
   SOAK_TEST_PROTOCOL.md
 
 html/
@@ -351,6 +358,7 @@ The harness currently exercises:
 - sensor-health greenhouse ramp context
 - sensor-health peer outlier detection with three or more comparable sensors
 - sensor-health persistent CRC instability even when the current hour is clean
+- cold-outside woodstove overshoot cooling behavior
 
 The harness needs admin database permissions because it creates and drops a
 throwaway test database. Set the password with:
@@ -359,6 +367,22 @@ throwaway test database. Set the password with:
 export GREENHOUSE_TEST_DB_ROOT_PASSWORD='your-root-password'
 python3 tools/simulation_harness.py
 ```
+
+## Soak-Test Collection
+
+`tools/collect_soak_data.py` packages the evidence normally needed after a
+greenhouse soak test. It gathers notes, controller and sensor logs, systemd
+state, journal output, Git metadata, SQL schema files, a compact database
+snapshot, and a MariaDB dump into a timestamped archive.
+
+Run it on the Pi after the test:
+
+```bash
+python3 tools/collect_soak_data.py --since "4 days ago"
+```
+
+Use `docs/SOAK_TEST_PROTOCOL.md` for the full field-test checklist and analysis
+workflow.
 
 ## GPIO Integration Testing
 

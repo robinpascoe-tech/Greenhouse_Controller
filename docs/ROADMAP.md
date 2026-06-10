@@ -1,8 +1,8 @@
 # Development Roadmap
 
-This roadmap captures high-value directions for the project after the `v0.9.0`
-release candidate. It is intended as a living planning document, not a promise
-that every feature will land in this exact order.
+This roadmap captures high-value directions for the project after the `v1.0.0`
+stable release. It is intended as a living planning document, not a promise that
+every feature will land in this exact order.
 
 The overall theme is to move from a schedule-driven thermostat toward a more
 adaptive greenhouse controller that understands outdoor conditions, thermal
@@ -14,8 +14,9 @@ Use outside temperature and recent temperature trends to choose cooling actions
 more intelligently.
 
 Status: initial outside-temperature-aware fan/window selection is implemented
-on `develop`. Further work can refine thresholds after real greenhouse testing
-and add trend/rate-of-change inputs.
+on `develop`, including a cold-outside fan timing profile for uncommon
+woodstove overshoot conditions. Further work can refine thresholds after real
+greenhouse testing and add trend/rate-of-change inputs.
 
 Initial rule-based behavior could include:
 
@@ -308,9 +309,14 @@ Status: a guarded GPIO integration test is available as
 samples pin state with `pinctrl`, uses a throwaway database, and should be run
 only when it is safe for GPIO pins to energize.
 
+Status: deterministic simulations now cover outside-aware cooling decisions,
+urgent-cooling release behavior, cold-outside fan timing, and a cold-day
+woodstove overshoot case where fan cooling is preferred while windows remain
+closed.
+
 Important future scenarios:
 
-- woodstove overheating while outside air is very cold
+- additional woodstove overheating cases while outside air is very cold
 - outside air only slightly cooler than inside air
 - rapid solar gain after sunrise
 - fast cooling after sunset
@@ -329,15 +335,14 @@ The simulation harness should remain the confidence engine for behavior changes.
 
 ## Suggested Development Order
 
-1. Refactor controller decision logic into testable functions.
-2. Add outside-temperature-aware cooling choice: fans, windows, both, or wait.
-3. Expand simulation coverage for adaptive cooling and woodstove overheating.
-4. Move sensor ID mapping out of code and into config or SQL.
-5. Build an interactive sensor assignment tool.
-6. Build a DS18B20 qualification and calibration tool.
-7. Add 1-Wire bus health and role-specific sensor-health reporting.
-8. Add soak-test report generation and maintenance annotations.
-9. Add Pi watchdog and wireless self-recovery support.
-10. Add expanded trend-based alerting.
-11. Add forecast ingestion and forecast-aware decisions.
-12. Build a modern dashboard around the improved state model.
+1. Continue soak-testing the initial outside-aware cooling behavior on
+   `develop`.
+2. Move sensor ID mapping out of code and into config or SQL.
+3. Build an interactive sensor assignment tool.
+4. Build a DS18B20 qualification and calibration tool.
+5. Add 1-Wire bus health and role-specific sensor-health reporting.
+6. Add soak-test report generation and maintenance annotations.
+7. Add Pi watchdog and wireless self-recovery support.
+8. Add expanded trend-based alerting.
+9. Add forecast ingestion and forecast-aware decisions.
+10. Build a modern dashboard around the improved state model.
