@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #################################################################
-# Greenhouse Controller v4.3.3
+# Greenhouse Controller v4.3.4
 #
 # Direct drop-in replacement for the original controller with:
 # - Original DB-driven schedule system
@@ -14,7 +14,11 @@
 # - Dynamic hysteresis widening
 # - One-loop sensor freshness grace for delayed currenttemp updates
 #
-# v4.3.3 fixes:
+# v4.3.4 fixes:
+# - Cold-outside fan cooling uses shorter timing to reduce woodstove overshoot
+#   without overcooling
+#
+# v4.3.3 fixes retained:
 # - Fan urgent-cooling assist uses a release band to reduce short cycling
 # - Fan minimum on/off times increased to reduce rapid cycling
 # - Dynamic hysteresis cycle warnings are rate-limited
@@ -164,6 +168,8 @@ recent_sensor_grace_used = False
 COLD_OUTSIDE_TEMP = Decimal("5")
 OUTSIDE_NEAR_INSIDE_DELTA = Decimal("3")
 URGENT_COOLING_RELEASE_BAND = Decimal("2")
+COLD_OUTSIDE_FAN_MIN_ON_SECONDS = 120
+COLD_OUTSIDE_FAN_MIN_OFF_SECONDS = 180
 
 
 # ================================================================
@@ -213,6 +219,7 @@ ACTUATOR_STATE = {
         "state": False,
         "last_change": 0.0,
         "changes": [],
+        "protection_profile": None,
     },
     "window": {
         "state": False,          # False=closed, True=open
@@ -475,7 +482,7 @@ def prune_cycle_history(actuator):
     ]
 
 
-def record_actuator_change(actuator, new_state):
+def record_actuator_change(actuator, new_state, protection_profile=None):
     """
     Record actuator transition for short-cycle and dynamic hysteresis logic.
 
@@ -492,10 +499,15 @@ def record_actuator_change(actuator, new_state):
     ACTUATOR_STATE[actuator]["last_change"] = now
     ACTUATOR_STATE[actuator]["changes"].append(now)
 
+    if actuator == "fan":
+        ACTUATOR_STATE[actuator]["protection_profile"] = (
+            protection_profile if new_state else None
+        )
+
     prune_cycle_history(actuator)
 
 
-def actuator_can_change(actuator, desired_state):
+def actuator_can_change(actuator, desired_state, min_on=None, min_off=None):
     """
     Enforce minimum ON/OFF durations.
 
@@ -510,26 +522,49 @@ def actuator_can_change(actuator, desired_state):
 
     rules = ACTUATOR_RULES[actuator]
     elapsed = time.monotonic() - ACTUATOR_STATE[actuator]["last_change"]
+    min_on = rules["min_on"] if min_on is None else min_on
+    min_off = rules["min_off"] if min_off is None else min_off
 
     if current_state is True and desired_state is False:
-        if elapsed < rules["min_on"]:
+        if elapsed < min_on:
             logger.info(
                 "%s OFF blocked by min_on protection (%.0fs remaining)",
                 actuator,
-                rules["min_on"] - elapsed,
+                min_on - elapsed,
             )
             return False
 
     if current_state is False and desired_state is True:
-        if elapsed < rules["min_off"]:
+        if elapsed < min_off:
             logger.info(
                 "%s ON blocked by min_off protection (%.0fs remaining)",
                 actuator,
-                rules["min_off"] - elapsed,
+                min_off - elapsed,
             )
             return False
 
     return True
+
+
+def fan_protection_limits(decision):
+    """
+    Return context-aware fan protection timing for the requested transition.
+
+    Normal greenhouse cooling uses the default fan timing. Cold-outside cooling
+    is allowed to run shorter so a woodstove overshoot can shed heat without
+    overcooling the greenhouse.
+    """
+
+    profile = (
+        decision.protection_profile
+        if decision.state is True
+        else ACTUATOR_STATE["fan"].get("protection_profile")
+    )
+
+    if profile == "cold_outside":
+        return COLD_OUTSIDE_FAN_MIN_ON_SECONDS, COLD_OUTSIDE_FAN_MIN_OFF_SECONDS
+
+    return None, None
 
 
 def log_cycle_warning(actuator, level, cycles, effective_range):
@@ -1081,11 +1116,16 @@ class ActuatorDecision:
         protection while still recording the actuator movement.
     reason:
         Short label useful for logging and future simulation assertions.
+    protection_profile:
+        Optional actuator protection profile. Currently used by fan decisions
+        so cold-outside cooling can use shorter anti-overcooling timing without
+        weakening normal solar-cooling anti-chatter behavior.
     """
 
     state: bool | None
     bypass_protection: bool = False
     reason: str = "hold"
+    protection_profile: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1228,7 +1268,11 @@ def decide_cooling_strategy(
 
     if outside_temp <= COLD_OUTSIDE_TEMP:
         return CoolingDecision(
-            ActuatorDecision(True, reason="cold_outside_fan_preferred"),
+            ActuatorDecision(
+                True,
+                reason="cold_outside_fan_preferred",
+                protection_profile="cold_outside",
+            ),
             ActuatorDecision(False, reason="cold_outside_window_avoided"),
             "cold_outside_fan_preferred",
         )
@@ -1300,6 +1344,7 @@ def apply_fan_decision(decision):
     if not decision.bypass_protection and not actuator_can_change(
         "fan",
         decision.state,
+        *fan_protection_limits(decision),
     ):
         return
 
@@ -1313,7 +1358,11 @@ def apply_fan_decision(decision):
         GPIO.output(AUX_VENT_FAN_GPIO, GPIO.LOW)
         logger.info("Ventilation fans OFF")
 
-    record_actuator_change("fan", decision.state)
+    record_actuator_change(
+        "fan",
+        decision.state,
+        protection_profile=decision.protection_profile,
+    )
 
     update_status(
         "UPDATE status SET fan=%s WHERE id=1",
@@ -1437,7 +1486,7 @@ def cooling_control(current_temp, outside_temp, settings, overrides):
 # ================================================================
 
 def main():
-    logger.info("Greenhouse Controller v4.3.3 starting.")
+    logger.info("Greenhouse Controller v4.3.4 starting.")
 
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
 

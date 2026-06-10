@@ -198,6 +198,8 @@ def reset_controller_state(thermostat, clock, gpio):
         state["changes"] = []
         if name == "window":
             state["last_direction"] = None
+        if name == "fan":
+            state["protection_profile"] = None
 
     for state in thermostat.CYCLE_WARNING_LOG_STATE.values():
         state["level"] = None
@@ -467,6 +469,7 @@ def describe_cooling_decision(decision):
             "state": decision.fan.state,
             "bypass_protection": decision.fan.bypass_protection,
             "reason": decision.fan.reason,
+            "protection_profile": decision.fan.protection_profile,
         },
         "window": {
             "state": decision.window.state,
@@ -642,6 +645,67 @@ def test_cycle_warning_log_throttle(thermostat, clock, gpio):
             str(third_range),
             str(fourth_range),
         ],
+    }
+
+
+def test_cold_outside_fan_timing_profile(thermostat, clock, gpio):
+    """Verify cold-outside fan cooling can stop sooner than normal cooling."""
+
+    reset_controller_state(thermostat, clock, gpio)
+
+    thermostat.record_actuator_change(
+        "fan",
+        True,
+        protection_profile="cold_outside",
+    )
+    clock.advance(thermostat.COLD_OUTSIDE_FAN_MIN_ON_SECONDS - 1)
+    cold_off_decision = thermostat.ActuatorDecision(False)
+    cold_off_blocked = thermostat.actuator_can_change(
+        "fan",
+        False,
+        *thermostat.fan_protection_limits(cold_off_decision),
+    )
+    clock.advance(1)
+    cold_off_allowed = thermostat.actuator_can_change(
+        "fan",
+        False,
+        *thermostat.fan_protection_limits(cold_off_decision),
+    )
+
+    reset_controller_state(thermostat, clock, gpio)
+    thermostat.record_actuator_change("fan", True)
+    clock.advance(thermostat.COLD_OUTSIDE_FAN_MIN_ON_SECONDS)
+    normal_off_blocked_at_cold_limit = thermostat.actuator_can_change(
+        "fan",
+        False,
+    )
+
+    reset_controller_state(thermostat, clock, gpio)
+    decision = thermostat.ActuatorDecision(
+        True,
+        reason="cold_outside_fan_preferred",
+        protection_profile="cold_outside",
+    )
+    thermostat.record_actuator_change("fan", False)
+    clock.advance(thermostat.COLD_OUTSIDE_FAN_MIN_OFF_SECONDS - 1)
+    cold_on_blocked = thermostat.actuator_can_change(
+        "fan",
+        True,
+        *thermostat.fan_protection_limits(decision),
+    )
+    clock.advance(1)
+    cold_on_allowed = thermostat.actuator_can_change(
+        "fan",
+        True,
+        *thermostat.fan_protection_limits(decision),
+    )
+
+    return {
+        "cold_off_blocked_before_120s": cold_off_blocked,
+        "cold_off_allowed_at_120s": cold_off_allowed,
+        "normal_off_blocked_at_120s": normal_off_blocked_at_cold_limit,
+        "cold_on_blocked_before_180s": cold_on_blocked,
+        "cold_on_allowed_at_180s": cold_on_allowed,
     }
 
 
@@ -1810,6 +1874,9 @@ def main():
         "fan_dynamic": simulate_fan(thermostat, clock),
         "window_dynamic": simulate_window(thermostat, clock),
         "cycle_warning_log_throttle": test_cycle_warning_log_throttle(
+            thermostat, clock, gpio
+        ),
+        "cold_outside_fan_timing_profile": test_cold_outside_fan_timing_profile(
             thermostat, clock, gpio
         ),
         "partial_sensor_failure": test_partial_sensor_failure(

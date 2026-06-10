@@ -247,6 +247,13 @@ cooling assist also has a release band: after the fan starts for urgent
 cooling, it remains available until the temperature falls safely below the
 urgent threshold instead of switching off immediately at the threshold edge.
 
+Cold-outside fan cooling has its own timing profile. When outside air is very
+cold and the controller chooses fans instead of windows, the fan may stop after
+120 seconds and may restart after 180 seconds. This is intended for uncommon
+woodstove overshoot cases where the greenhouse needs to shed excess heat
+without a long fan run overcooling the space. Normal solar/hot-day ventilation
+keeps the longer fan protection timing.
+
 ## Safety Behavior
 
 The controller is fail-safe oriented:
