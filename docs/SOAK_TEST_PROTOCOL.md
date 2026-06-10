@@ -38,7 +38,53 @@ Useful conditions to capture:
 - at least one heater event, if weather permits
 - normal sensor-reader and sensor-health runs
 
-## Before Starting
+## Deployment Readiness Checklist
+
+Before starting a soak test, verify the Pi is running the branch and commit you
+intend to test.
+
+For a `develop` soak test:
+
+```bash
+cd /home/pi/Greenhouse_Controller
+git fetch --all --tags
+git switch develop
+git pull --ff-only
+python3 -m py_compile scripts/*.py tools/*.py
+```
+
+If the controller code has changed, restart the service only after the code,
+config, database schema, and cron entries are confirmed:
+
+```bash
+systemctl status greenhouse-controller.service --no-pager
+crontab -l
+```
+
+Verify expected runtime state:
+
+```bash
+git status --short --branch
+git describe --tags --always --dirty
+systemctl show greenhouse-controller.service \
+  --property=ActiveState,SubState,MainPID,NRestarts,ExecMainStartTimestamp
+tail -n 80 /home/pi/Greenhouse_Controller/thermostat.log
+tail -n 80 /home/pi/Greenhouse_Controller/greenhouse_sensors.log
+```
+
+Record in `notes.md`:
+
+- branch/tag under test
+- full commit hash
+- start time
+- weather expectations
+- whether woodstove use is expected
+- whether any manual overrides or maintenance are planned
+
+Do not run `tools/gpio_integration_test.py` against a live connected
+greenhouse unless it is explicitly safe for the real relays to move.
+
+## Version And Preflight Checks
 
 Record the exact code version:
 
@@ -134,65 +180,26 @@ Examples:
 
 ## Data To Collect
 
-Create a collection directory after the soak test:
-
-```bash
-STAMP=$(date +%Y%m%d-%H%M%S)
-OUT=/home/pi/greenhouse_soak_test_$STAMP
-mkdir -p "$OUT"
-```
-
-Collect Git/version information:
+The preferred collection method is the repository helper:
 
 ```bash
 cd /home/pi/Greenhouse_Controller
-{
-  git status --short --branch
-  git rev-parse HEAD
-  git describe --tags --always
-  git log --oneline -5
-} > "$OUT/git_version.txt"
+python3 tools/collect_soak_data.py --since "2026-06-07 15:00:00"
 ```
 
-Collect controller logs:
+The helper prints the generated archive path, such as:
 
 ```bash
-cp /home/pi/Greenhouse_Controller/thermostat.log "$OUT/" 2>/dev/null || true
-journalctl -u greenhouse-controller --since "4 days ago" \
-  > "$OUT/systemd_journal_greenhouse-controller.log"
+/tmp/greenhouse_soak_20260610T171823Z.tar.gz
 ```
 
-Collect database export:
+It collects notes, logs, service state, Git metadata, SQL schema files, a
+database snapshot, and a MariaDB dump. Database credentials are read from
+`greenhouse.conf` and are not printed.
 
-```bash
-mysqldump --single-transaction --skip-lock-tables greenhouse \
-  currenttemp \
-  status \
-  status_log \
-  settings \
-  overrides \
-  sensor_diagnostics \
-  sensor_health \
-  sensor_alerts \
-  sensor_state \
-  sensor_profile \
-  > "$OUT/database_soak_tables.sql"
-```
-
-If using a non-root SQL user, add the usual `-u user -p` options.
-
-Copy your notes into the same directory:
-
-```bash
-cp notes.md "$OUT/" 2>/dev/null || true
-```
-
-Create a compressed archive:
-
-```bash
-tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
-echo "$OUT.tar.gz"
-```
+Use `--output-root /path/to/dir` if you want the archive somewhere other than
+`/tmp`. Use `--keep-unpacked` if you want to inspect the collection directory
+on the Pi before copying it elsewhere.
 
 ## Analysis Checklist
 

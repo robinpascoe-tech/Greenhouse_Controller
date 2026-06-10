@@ -709,6 +709,62 @@ def test_cold_outside_fan_timing_profile(thermostat, clock, gpio):
     }
 
 
+def test_woodstove_overshoot_cold_day(thermostat, clock, gpio):
+    """
+    Simulate uncommon woodstove overheating on a very cold day.
+
+    The controller should prefer fans over windows, allow the fan to stop after
+    the cold-outside 120s minimum, and allow a restart after the 180s rest if
+    the woodstove continues adding heat.
+    """
+
+    reset_controller_state(thermostat, clock, gpio)
+
+    settings = {
+        "hightemp": Decimal("36"),
+        "hightemprange": Decimal("4"),
+        "windowtemp": Decimal("33"),
+        "windowtemprange": Decimal("6"),
+    }
+    overrides = {"fan": 0, "window": 0}
+    outside = Decimal("-10")
+
+    thermostat.cooling_control(Decimal("39.5"), outside, settings, overrides)
+    first_fan = thermostat.ACTUATOR_STATE["fan"]["state"]
+    first_profile = thermostat.ACTUATOR_STATE["fan"]["protection_profile"]
+    first_window = scalar("SELECT window FROM status WHERE id=1")
+
+    clock.advance(thermostat.COLD_OUTSIDE_FAN_MIN_ON_SECONDS - 1)
+    thermostat.cooling_control(Decimal("34"), outside, settings, overrides)
+    fan_before_min_on = thermostat.ACTUATOR_STATE["fan"]["state"]
+
+    clock.advance(1)
+    thermostat.cooling_control(Decimal("34"), outside, settings, overrides)
+    fan_after_min_on = thermostat.ACTUATOR_STATE["fan"]["state"]
+
+    clock.advance(thermostat.COLD_OUTSIDE_FAN_MIN_OFF_SECONDS - 1)
+    thermostat.cooling_control(Decimal("39.5"), outside, settings, overrides)
+    fan_before_min_off = thermostat.ACTUATOR_STATE["fan"]["state"]
+
+    clock.advance(1)
+    thermostat.cooling_control(Decimal("39.5"), outside, settings, overrides)
+    fan_after_min_off = thermostat.ACTUATOR_STATE["fan"]["state"]
+    final_window = scalar("SELECT window FROM status WHERE id=1")
+
+    return {
+        "first_fan_on": first_fan,
+        "first_profile": first_profile,
+        "first_window_closed": first_window == 0,
+        "fan_still_on_before_120s": fan_before_min_on,
+        "fan_off_after_120s": not fan_after_min_on,
+        "fan_still_off_before_180s": not fan_before_min_off,
+        "fan_restarted_after_180s": fan_after_min_off,
+        "window_remained_closed": final_window == 0,
+        "fan_changes": len(thermostat.ACTUATOR_STATE["fan"]["changes"]),
+        "window_changes": len(thermostat.ACTUATOR_STATE["window"]["changes"]),
+    }
+
+
 def test_overrides(thermostat, clock):
     reset_controller_state(thermostat, clock, thermostat.GPIO)
     future = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -1877,6 +1933,9 @@ def main():
             thermostat, clock, gpio
         ),
         "cold_outside_fan_timing_profile": test_cold_outside_fan_timing_profile(
+            thermostat, clock, gpio
+        ),
+        "woodstove_overshoot_cold_day": test_woodstove_overshoot_cold_day(
             thermostat, clock, gpio
         ),
         "partial_sensor_failure": test_partial_sensor_failure(
