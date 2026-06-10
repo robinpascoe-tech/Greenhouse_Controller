@@ -199,6 +199,10 @@ def reset_controller_state(thermostat, clock, gpio):
         if name == "window":
             state["last_direction"] = None
 
+    for state in thermostat.CYCLE_WARNING_LOG_STATE.values():
+        state["level"] = None
+        state["last_log"] = 0.0
+
     con = root_conn(TEST_DB)
     try:
         with con.cursor() as cur:
@@ -541,6 +545,17 @@ def test_outside_aware_cooling_strategy(thermostat):
             False,
             False,
         ),
+        "urgent_release_keeps_fan_assist": thermostat.decide_cooling_strategy(
+            Decimal("39"),
+            Decimal("20"),
+            high,
+            high_range,
+            window,
+            window_range,
+            False,
+            False,
+            current_fan_state=True,
+        ),
         "override_preserved": thermostat.decide_cooling_strategy(
             Decimal("10"),
             Decimal("-5"),
@@ -594,6 +609,39 @@ def simulate_window(thermostat, clock):
         "possible_changes_without_widening": len(temps),
         "max_effective_range": str(max_range),
         "final_db_state": scalar("SELECT window FROM status WHERE id=1"),
+    }
+
+
+def test_cycle_warning_log_throttle(thermostat, clock, gpio):
+    """Verify dynamic hysteresis warnings are rate-limited."""
+
+    reset_controller_state(thermostat, clock, gpio)
+    records = []
+    original_warning = thermostat.logger.warning
+
+    try:
+        thermostat.logger.warning = lambda *args, **kwargs: records.append(args)
+        for _ in range(thermostat.ACTUATOR_RULES["fan"]["warn_cycles"]):
+            thermostat.record_actuator_change("fan", True)
+            clock.advance(1)
+
+        first_range = thermostat.dynamic_hysteresis_range("fan", Decimal("4"))
+        second_range = thermostat.dynamic_hysteresis_range("fan", Decimal("4"))
+        clock.advance(thermostat.CYCLE_WARNING_LOG_INTERVAL_SECONDS - 1)
+        third_range = thermostat.dynamic_hysteresis_range("fan", Decimal("4"))
+        clock.advance(1)
+        fourth_range = thermostat.dynamic_hysteresis_range("fan", Decimal("4"))
+    finally:
+        thermostat.logger.warning = original_warning
+
+    return {
+        "warning_records": len(records),
+        "effective_ranges": [
+            str(first_range),
+            str(second_range),
+            str(third_range),
+            str(fourth_range),
+        ],
     }
 
 
@@ -1761,6 +1809,9 @@ def main():
         "heater_dynamic": simulate_heater(thermostat, clock),
         "fan_dynamic": simulate_fan(thermostat, clock),
         "window_dynamic": simulate_window(thermostat, clock),
+        "cycle_warning_log_throttle": test_cycle_warning_log_throttle(
+            thermostat, clock, gpio
+        ),
         "partial_sensor_failure": test_partial_sensor_failure(
             thermostat, clock, gpio
         ),

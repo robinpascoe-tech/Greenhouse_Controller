@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #################################################################
-# Greenhouse Controller v4.3.2
+# Greenhouse Controller v4.3.3
 #
 # Direct drop-in replacement for the original controller with:
 # - Original DB-driven schedule system
@@ -14,7 +14,12 @@
 # - Dynamic hysteresis widening
 # - One-loop sensor freshness grace for delayed currenttemp updates
 #
-# v4.3.2 fixes:
+# v4.3.3 fixes:
+# - Fan urgent-cooling assist uses a release band to reduce short cycling
+# - Fan minimum on/off times increased to reduce rapid cycling
+# - Dynamic hysteresis cycle warnings are rate-limited
+#
+# v4.3.2 fixes retained:
 # - Operator overrides bypass short-cycle protection
 # - Override-triggered actuator changes still count toward cycle history
 # - Startup DB reset failures are logged but do not prevent controller startup
@@ -158,6 +163,7 @@ recent_sensor_grace_used = False
 # cooling method is preferred once SQL thresholds already call for cooling.
 COLD_OUTSIDE_TEMP = Decimal("5")
 OUTSIDE_NEAR_INSIDE_DELTA = Decimal("3")
+URGENT_COOLING_RELEASE_BAND = Decimal("2")
 
 
 # ================================================================
@@ -174,8 +180,8 @@ ACTUATOR_RULES = {
         "severe_bonus": Decimal("2.0"),
     },
     "fan": {
-        "min_on": 120,          # stay on at least 2 min
-        "min_off": 60,          # stay off at least 1 min
+        "min_on": 300,          # stay on at least 5 min before off
+        "min_off": 180,         # stay off at least 3 min before on
         "warn_cycles": 10,
         "severe_cycles": 20,
         "warning_bonus": Decimal("1.0"),
@@ -193,6 +199,7 @@ ACTUATOR_RULES = {
 
 WINDOW_REVERSAL_LOCKOUT_SECONDS = 60
 CYCLE_HISTORY_SECONDS = 3600
+CYCLE_WARNING_LOG_INTERVAL_SECONDS = 900
 
 # In-memory state is intentionally used here.
 # This avoids additional SQL schema complexity and is sufficient for this project.
@@ -213,6 +220,12 @@ ACTUATOR_STATE = {
         "last_direction": None,  # "open" or "close"
         "changes": [],
     },
+}
+
+CYCLE_WARNING_LOG_STATE = {
+    "heater": {"level": None, "last_log": 0.0},
+    "fan": {"level": None, "last_log": 0.0},
+    "window": {"level": None, "last_log": 0.0},
 }
 
 
@@ -519,6 +532,32 @@ def actuator_can_change(actuator, desired_state):
     return True
 
 
+def log_cycle_warning(actuator, level, cycles, effective_range):
+    """Log cycle warnings on level changes and occasional reminders only."""
+
+    now = time.monotonic()
+    state = CYCLE_WARNING_LOG_STATE[actuator]
+
+    should_log = (
+        state["level"] != level
+        or now - state["last_log"] >= CYCLE_WARNING_LOG_INTERVAL_SECONDS
+    )
+
+    if not should_log:
+        return
+
+    logger.warning(
+        "%s %s cycling detected (%d/hr). Using widened hysteresis range %s.",
+        actuator,
+        level,
+        cycles,
+        effective_range,
+    )
+
+    state["level"] = level
+    state["last_log"] = now
+
+
 def dynamic_hysteresis_range(actuator, base_range):
     """
     Dynamically widen hysteresis when excessive cycling is detected.
@@ -538,25 +577,15 @@ def dynamic_hysteresis_range(actuator, base_range):
 
     if cycles >= rules["severe_cycles"]:
         effective = base_range + rules["severe_bonus"]
-        logger.warning(
-            "%s severe cycling detected (%d/hr). "
-            "Using widened hysteresis range %s.",
-            actuator,
-            cycles,
-            effective,
-        )
+        log_cycle_warning(actuator, "severe", cycles, effective)
         return effective
 
     if cycles >= rules["warn_cycles"]:
         effective = base_range + rules["warning_bonus"]
-        logger.warning(
-            "%s elevated cycling detected (%d/hr). "
-            "Using widened hysteresis range %s.",
-            actuator,
-            cycles,
-            effective,
-        )
+        log_cycle_warning(actuator, "elevated", cycles, effective)
         return effective
+
+    CYCLE_WARNING_LOG_STATE[actuator]["level"] = None
 
     return base_range
 
@@ -686,7 +715,7 @@ def close_windows(force=False, record=True):
     """
     Close windows using the standard close sequence.
 
-    v4.3.2 design decision:
+    Retained design decision:
     - 24s + 16s is the standard close sequence everywhere:
       normal close, startup close, and emergency shutdown close.
     - Forced startup/shutdown closes may update DB state without recording
@@ -1143,6 +1172,7 @@ def decide_cooling_strategy(
     window_range,
     fan_override,
     window_override,
+    current_fan_state=False,
 ):
     """
     Choose coordinated fan/window cooling behavior.
@@ -1177,6 +1207,7 @@ def decide_cooling_strategy(
     fan_lower, fan_upper = hysteresis_bounds(high_temp, high_range)
     window_lower, _window_upper = hysteresis_bounds(window_temp, window_range)
     urgent_temp = max(high_temp + high_range, window_temp + window_range)
+    urgent_release_temp = urgent_temp - URGENT_COOLING_RELEASE_BAND
 
     if current_temp >= urgent_temp:
         return CoolingDecision(
@@ -1211,6 +1242,13 @@ def decide_cooling_strategy(
             ),
             ActuatorDecision(False, reason="outside_warmer_window_avoided"),
             "outside_warmer_window_avoided",
+        )
+
+    if current_fan_state is True and current_temp >= urgent_release_temp:
+        return CoolingDecision(
+            ActuatorDecision(True, reason="urgent_cooling_release"),
+            ActuatorDecision(True, reason="urgent_cooling_release"),
+            "urgent_cooling_release",
         )
 
     if outside_delta <= OUTSIDE_NEAR_INSIDE_DELTA:
@@ -1370,6 +1408,7 @@ def get_cooling_decision(current_temp, outside_temp, settings, overrides):
         window_range,
         overrides["fan"],
         overrides["window"],
+        ACTUATOR_STATE["fan"]["state"],
     )
 
 
@@ -1398,7 +1437,7 @@ def cooling_control(current_temp, outside_temp, settings, overrides):
 # ================================================================
 
 def main():
-    logger.info("Greenhouse Controller v4.3.2 starting.")
+    logger.info("Greenhouse Controller v4.3.3 starting.")
 
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
 

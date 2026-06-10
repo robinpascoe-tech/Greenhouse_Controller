@@ -235,6 +235,18 @@ The widening never shrinks below the configured SQL range. It only adds a
 temporary bonus when recent cycle counts exceed configured warning or severe
 thresholds.
 
+Dynamic hysteresis warnings are rate-limited. The controller logs the first
+elevated/severe cycling warning, logs again if the severity changes, and then
+logs periodic reminders while the condition persists. This keeps the warning
+visible without flooding the controller log every loop.
+
+Ventilation fan protection is intentionally more conservative than a simple
+threshold toggle. Once the fan starts, it must stay on long enough to avoid
+two-minute pulse behavior, and it must rest briefly before restarting. Urgent
+cooling assist also has a release band: after the fan starts for urgent
+cooling, it remains available until the temperature falls safely below the
+urgent threshold instead of switching off immediately at the threshold edge.
+
 ## Safety Behavior
 
 The controller is fail-safe oriented:
